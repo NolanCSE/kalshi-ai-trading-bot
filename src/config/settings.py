@@ -30,11 +30,12 @@ class EnsembleConfig:
     enabled: bool = True
     # Model roster for ensemble decisions
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "grok-4-1-fast-reasoning": {"provider": "xai", "role": "forecaster", "weight": 0.30},
+        "grok-4-1-fast-reasoning": {"provider": "xai", "role": "forecaster", "weight": 0.25},
         "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "news_analyst", "weight": 0.20},
         "openai/o3": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.20},
         "google/gemini-3-pro-preview": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.15},
         "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "risk_manager", "weight": 0.15},
+        "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "ideology_analyst", "weight": 0.05},
     })
     min_models_for_consensus: int = 3
     disagreement_threshold: float = 0.25  # Std dev above this = low confidence
@@ -42,6 +43,8 @@ class EnsembleConfig:
     debate_enabled: bool = True
     calibration_tracking: bool = True
     max_ensemble_cost: float = 0.50  # Max cost per ensemble decision
+    # Ideology agent settings
+    ideology_agent_override: bool = True  # Allow ideology agent to trigger manual review
 
 
 @dataclass

@@ -22,6 +22,7 @@ from src.agents.risk_manager_agent import RiskManagerAgent
 from src.agents.trader_agent import TraderAgent
 from src.agents.forecaster_agent import ForecasterAgent
 from src.agents.news_analyst_agent import NewsAnalystAgent
+from src.agents.ideology_agent import IdeologyAgent
 from src.utils.logging_setup import get_trading_logger
 
 logger = get_trading_logger("debate")
@@ -366,5 +367,6 @@ class DebateRunner:
             "bull_researcher": BullResearcher(),
             "bear_researcher": BearResearcher(),
             "risk_manager": RiskManagerAgent(),
+            "ideology_analyst": IdeologyAgent(),
             "trader": TraderAgent(),
         }

@@ -49,6 +49,10 @@ sentry-sdk==1.39.2
 # xAI Grok API client
 xai_sdk>=1.0.0
 
+# Knowledge library RAG dependencies (optional but recommended)
+faiss-cpu>=1.7.4      # Vector similarity search for knowledge library
+pymupdf>=1.23.0       # PDF text extraction for knowledge library
+
 # WebSocket streaming
 websockets>=12.0
 

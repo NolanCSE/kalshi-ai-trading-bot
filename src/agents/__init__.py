@@ -13,6 +13,7 @@ from src.agents.bull_researcher import BullResearcher
 from src.agents.bear_researcher import BearResearcher
 from src.agents.risk_manager_agent import RiskManagerAgent
 from src.agents.trader_agent import TraderAgent
+from src.agents.ideology_agent import IdeologyAgent
 from src.agents.ensemble import EnsembleRunner
 from src.agents.debate import DebateRunner
 
@@ -24,6 +25,7 @@ __all__ = [
     "BearResearcher",
     "RiskManagerAgent",
     "TraderAgent",
+    "IdeologyAgent",
     "EnsembleRunner",
     "DebateRunner",
 ]

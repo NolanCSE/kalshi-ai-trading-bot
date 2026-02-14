@@ -1,0 +1,182 @@
+# Worldview Configuration for Ideology Agent
+# This file defines your ideological framework, beliefs, and domain expertise
+# The Ideology Agent uses this to generate predictions based on your worldview
+
+ideology_agent:
+  enabled: true
+  
+  # Model to use for ideology analysis
+  model: "anthropic/claude-sonnet-4.5"
+  provider: "openrouter"
+  
+  # Override trigger settings - when to pause for manual review
+  override_triggers:
+    min_divergence_from_ensemble: 0.20      # >20% probability difference
+    min_worldview_confidence: 0.70          # You have >70% confidence
+    min_divergence_from_market: 0.15        # Market differs by >15%
+    max_position_size_pct: 0.05             # Position >5% of portfolio
+  
+  # Confidence inference settings
+  confidence_inference:
+    enabled: true
+    high_confidence_phrases:
+      - "will certainly"
+      - "inevitably"
+      - "must"
+      - "definitely"
+      - "historically always"
+      - "structurally guaranteed"
+      - "cannot fail to"
+      - "is guaranteed"
+    medium_confidence_phrases:
+      - "likely"
+      - "probably"
+      - "expected to"
+      - "tends to"
+      - "typically"
+      - "in most cases"
+      - "generally"
+      - "usually"
+    low_confidence_phrases:
+      - "might"
+      - "could"
+      - "possibly"
+      - "may"
+      - "uncertain"
+      - "unclear"
+      - "remains to be seen"
+      - "hard to predict"
+
+# Your worldview dimensions - define your frameworks and beliefs
+worldview:
+  political:
+    framework: "techno_libertarian"  # e.g., "progressive", "conservative", "libertarian", "techno_optimist"
+    confidence_in_framework: 0.75
+    key_beliefs:
+      - "Free markets generally outperform regulation in technology sectors"
+      - "Regulatory capture is structurally inevitable in large bureaucracies"
+      - "AI development will accelerate faster than consensus expects"
+    
+  economic:
+    framework: "monetarist_with_deflation"
+    confidence_in_framework: 0.70
+    key_beliefs:
+      - "Technology deflation will keep inflation lower than central banks predict"
+      - "Money printing eventually causes asset inflation more than consumer inflation"
+      - "Cryptocurrency adoption follows predictable adoption curves"
+    
+  technology:
+    framework: "exponential_growth_realist"
+    confidence_in_framework: 0.80
+    key_beliefs:
+      - "LLM capabilities are consistently underestimated by mainstream analysts"
+      - "AI safety regulation will lag capability development by 5-10 years"
+      - "Technological change follows exponential, not linear, patterns"
+    
+  # Domain expertise areas
+domain_expertise:
+  - area: "artificial_intelligence"
+    expertise_level: "expert"  # beginner, knowledgeable, expert
+    years_experience: 10
+    specific_insights:
+      - "Training scaling laws have held consistently across model generations"
+      - "Regulatory capture in AI is structurally difficult due to rapid change"
+      - "Open source models follow predictable capability curves"
+      
+  - area: "monetary_policy"
+    expertise_level: "knowledgeable"
+    years_experience: 5
+    specific_insights:
+      - "Fed predictions consistently miss turning points by 6-12 months"
+      - "Quantitative tightening has non-linear effects on asset prices"
+
+# Knowledge library configuration
+knowledge_library:
+  enabled: true
+  library_path: "library/"  # Path to your document library
+  
+  # Document categories
+  categories:
+    - name: "economic_theory"
+      description: "Books and papers on economics"
+      relevance_domains: ["economics", "monetary_policy", "markets"]
+      
+    - name: "tech_prediction"
+      description: "Works on technology trends and forecasting"
+      relevance_domains: ["technology", "AI", "innovation"]
+      
+    - name: "political_theory"
+      description: "Political science and policy analysis"
+      relevance_domains: ["politics", "policy", "regulation"]
+      
+    - name: "risk_theory"
+      description: "Works on uncertainty, risk, and probability"
+      relevance_domains: ["risk", "finance", "probability"]
+      
+    - name: "personal_notes"
+      description: "Your own notes and frameworks"
+      relevance_domains: ["all"]  # Applies to all domains
+  
+  # RAG settings
+  rag_settings:
+    chunk_size: 512
+    chunk_overlap: 128
+    top_k_retrieval: 5
+    embedding_model: "text-embedding-3-small"  # OpenAI embedding model
+    similarity_threshold: 0.75
+    
+  # Supported document formats
+  supported_formats:
+    - ".pdf"
+    - ".md"
+    - ".txt"
+
+# Applicable market categories
+# The ideology agent only applies to markets in these categories
+applicable_categories:
+  - "politics"
+  - "economics"
+  - "technology"
+  - "climate"
+  - "regulation"
+  - "policy"
+
+# Excluded categories - ideology agent skips these
+excluded_markets:
+  - "sports"
+  - "weather"
+  - "entertainment"
+  - "celebrities"
+  - "pure_chance"
+
+# News integration settings
+news_integration:
+  enabled: true
+  use_existing_rss: true
+  max_news_articles: 10
+  news_age_hours: 48  # Only use news from last 48 hours
+  
+  # Interpretation settings
+  interpretation:
+    filter_through_worldview: true
+    identify_confirming_challenges: true
+    flag_blind_spots: true
+
+# Calibration tracking
+calibration_tracking:
+  enabled: true
+  min_predictions_before_weight_adjustment: 20
+  brier_score_threshold: 0.25  # Target Brier score
+  
+  # Dynamic weight adjustment (optional)
+  dynamic_weighting:
+    enabled: false  # Set to true to auto-adjust weight based on calibration
+    min_weight: 0.05
+    max_weight: 0.30
+    
+# Logging and review
+logging:
+  log_all_predictions: true
+  log_retrieved_passages: true
+  log_news_interpretation: true
+  store_divergence_alerts: true
