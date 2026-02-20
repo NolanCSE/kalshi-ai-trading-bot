@@ -52,6 +52,9 @@ xai_sdk>=1.0.0
 # Knowledge library RAG dependencies (optional but recommended)
 faiss-cpu>=1.7.4      # Vector similarity search for knowledge library
 pymupdf>=1.23.0       # PDF text extraction for knowledge library
+sentence-transformers>=2.2.0  # Local embeddings (zero API cost)
+langchain-text-splitters>=0.0.1  # Semantic chunking for books
+llama-index>=0.10.0    # RAG framework with local embeddings
 
 # WebSocket streaming
 websockets>=12.0

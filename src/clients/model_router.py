@@ -28,31 +28,36 @@ from src.utils.logging_setup import TradingLoggerMixin
 CAPABILITY_MAP: Dict[str, List[Tuple[str, str]]] = {
     "fast": [
         ("google/gemini-3-flash-preview", "openrouter"),
-        ("grok-4-1-fast-reasoning", "xai"),
+        ("x-ai/grok-4-1-fast-reasoning", "openrouter"),
     ],
     "cheap": [
         ("deepseek/deepseek-v3.2", "openrouter"),
         ("google/gemini-3-flash-preview", "openrouter"),
     ],
     "reasoning": [
-        ("grok-4-1-fast-reasoning", "xai"),
+        ("x-ai/grok-4-1-fast-reasoning", "openrouter"),
         ("openai/o3", "openrouter"),
         ("anthropic/claude-sonnet-4.5", "openrouter"),
     ],
     "balanced": [
         ("anthropic/claude-sonnet-4.5", "openrouter"),
         ("openai/o3", "openrouter"),
-        ("grok-4-1-fast-reasoning", "xai"),
+        ("x-ai/grok-4-1-fast-reasoning", "openrouter"),
+    ],
+    "retrieval": [
+        # Low-censorship models for knowledge retrieval without moral filtering
+        ("mistralai/mistral-7b-instruct", "openrouter"),
     ],
 }
 
 # Full fleet: used when we need a fallback chain that spans all providers.
 FULL_FLEET: List[Tuple[str, str]] = [
-    ("grok-4-1-fast-reasoning", "xai"),
+    ("x-ai/grok-4-1-fast-reasoning", "openrouter"),
     ("anthropic/claude-sonnet-4.5", "openrouter"),
     ("openai/o3", "openrouter"),
     ("google/gemini-3-pro-preview", "openrouter"),
     ("deepseek/deepseek-v3.2", "openrouter"),
+    ("mistralai/mistral-7b-instruct", "openrouter"),  # Low-censorship retrieval
 ]
 
 
@@ -181,12 +186,9 @@ class ModelRouter(TradingLoggerMixin):
 
     def _infer_provider(self, model: str) -> str:
         """Determine which provider owns a model string."""
-        # OpenRouter models use a slash-delimited namespace
+        # OpenRouter models use a slash-delimited namespace (e.g., x-ai/grok-4)
         if "/" in model:
             return "openrouter"
-        # Grok models go through XAI
-        if model.startswith("grok"):
-            return "xai"
         # Default: try openrouter (it can proxy many models)
         return "openrouter"
 

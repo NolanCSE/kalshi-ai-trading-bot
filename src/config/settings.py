@@ -30,12 +30,14 @@ class EnsembleConfig:
     enabled: bool = True
     # Model roster for ensemble decisions
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "grok-4-1-fast-reasoning": {"provider": "xai", "role": "forecaster", "weight": 0.25},
+        "x-ai/grok-4-1-fast-reasoning": {"provider": "openrouter", "role": "forecaster", "weight": 0.25},
         "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "news_analyst", "weight": 0.20},
         "openai/o3": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.20},
         "google/gemini-3-pro-preview": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.15},
         "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "risk_manager", "weight": 0.15},
-        "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "ideology_analyst", "weight": 0.05},
+        # Knowledge researcher uses Mistral via OpenRouter for low-censorship retrieval
+        # Note: NOT part of weighted ensemble - provides context to trader only
+        "mistralai/mistral-7b-instruct": {"provider": "openrouter", "role": "knowledge_researcher", "weight": 0.0},
     })
     min_models_for_consensus: int = 3
     disagreement_threshold: float = 0.25  # Std dev above this = low confidence
@@ -82,8 +84,8 @@ class TradingConfig:
     scan_interval_seconds: int = 30      # DECREASED: Scan more frequently (was 60, now 30)
     
     # AI model configuration
-    primary_model: str = "grok-4-1-fast-reasoning"  # Latest xAI frontier reasoning model
-    fallback_model: str = "grok-4-1-fast-non-reasoning"  # Fallback to non-reasoning variant
+    primary_model: str = "x-ai/grok-4-1-fast-reasoning"  # Grok via OpenRouter
+    fallback_model: str = "x-ai/grok-4-1-fast-non-reasoning"  # Fallback via OpenRouter
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     

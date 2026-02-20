@@ -1,7 +1,7 @@
 """
 Trader Agent -- final decision synthesiser.
 
-Uses Grok-4 (via xAI) by default.  Takes all other agents' outputs and
+Uses Grok-4 (via OpenRouter) by default.  Takes all other agents' outputs and
 makes the final BUY/SKIP decision, producing a TradingDecision-compatible dict.
 """
 
@@ -18,7 +18,7 @@ class TraderAgent(BaseAgent):
 
     AGENT_NAME = "trader"
     AGENT_ROLE = "trader"
-    DEFAULT_MODEL = "grok-4-1-fast-reasoning"
+    DEFAULT_MODEL = "x-ai/grok-4-1-fast-reasoning"
 
     SYSTEM_PROMPT = (
         "You are the head trader at an AI-powered prediction market fund. "
@@ -109,6 +109,31 @@ class TraderAgent(BaseAgent):
                 f"  Reasoning: {risk.get('reasoning', 'N/A')[:300]}"
             )
 
+        # Add knowledge researcher context if available
+        knowledge_context = ""
+        if context.get("knowledge_result"):
+            kr = context["knowledge_result"]
+            if kr.get("worldview_applies"):
+                knowledge_parts = ["KNOWLEDGE RESEARCHER:"]
+                
+                if kr.get("worldview_context"):
+                    knowledge_parts.append(f"  Worldview: {kr['worldview_context'][:300]}...")
+                
+                if kr.get("key_frameworks"):
+                    frameworks = ", ".join(kr['key_frameworks'][:3])
+                    knowledge_parts.append(f"  Key frameworks: {frameworks}")
+                
+                if kr.get("retrieved_passages") and len(kr["retrieved_passages"]) > 0:
+                    knowledge_parts.append(f"  Retrieved {len(kr['retrieved_passages'])} relevant passages from knowledge library")
+                
+                if kr.get("news_summary"):
+                    knowledge_parts.append(f"  News context: {kr['news_summary'][:200]}...")
+                
+                if kr.get("reasoning"):
+                    knowledge_parts.append(f"  Research reasoning: {kr['reasoning'][:200]}...")
+                
+                knowledge_context = "\n".join(knowledge_parts)
+
         briefing = "\n\n".join(briefing_parts) if briefing_parts else "[No agent analyses available]"
 
         # Portfolio context
@@ -121,12 +146,28 @@ class TraderAgent(BaseAgent):
                 f"max_position_pct={pf.get('max_position_pct', 5)}%"
             )
 
+        # Build synthesis prompt that asks Trader to use worldview context
+        worldview_instruction = ""
+        if knowledge_context:
+            worldview_instruction = (
+                f"\n\nYou have access to a specific worldview framework through the Knowledge Researcher. "
+                f"Use this context to INTERPRET the other agents' analyses. "
+                f"How would someone with this worldview evaluate the arguments presented? "
+                f"What would they find convincing or questionable? "
+                f"Synthesize the debate THROUGH this lens, not in spite of it."
+            )
+
         return (
-            f"Review the following market and your team's analysis, then make "
-            f"a final trading decision.\n\n"
+            f"You are the head trader at an AI-powered prediction market fund. "
+            f"You hold specific beliefs and frameworks that inform your judgment.\n\n"
             f"=== MARKET ===\n{summary}\n\n"
-            f"=== TEAM ANALYSIS ===\n{briefing}{portfolio_note}\n\n"
-            f"Make your final BUY/SELL/SKIP decision. Be decisive but disciplined.\n"
+            f"=== TEAM ANALYSIS ===\n{briefing}\n\n"
+            f"{knowledge_context}\n"
+            f"{worldview_instruction}\n"
+            f"{portfolio_note}\n\n"
+            f"Synthesize the above analyses through your worldview lens to make a final decision. "
+            f"You are not merely averaging opinions - you are JUDGING them based on your framework.\n\n"
+            f"Make your final BUY/SELL/SKIP decision with confidence and conviction.\n"
             f"Return ONLY a JSON object inside a ```json``` code block."
         )
 

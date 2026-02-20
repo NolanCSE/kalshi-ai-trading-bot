@@ -47,6 +47,10 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "input_per_1k": 0.00025,
         "output_per_1k": 0.00038,
     },
+    "mistralai/mistral-7b-instruct": {
+        "input_per_1k": 0.00007,
+        "output_per_1k": 0.00007,
+    },
 }
 
 # Ordered fallback chain -- if the requested model fails, try the next one.

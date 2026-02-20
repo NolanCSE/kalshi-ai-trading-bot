@@ -1,7 +1,7 @@
 """
 Forecaster Agent -- estimates the true YES probability for a market.
 
-Uses Grok-4 (via xAI) by default.  Focuses on:
+Uses Grok-4 (via OpenRouter) by default.  Focuses on:
 - Base rate analysis
 - Current conditions assessment
 - Probability estimation with calibration
@@ -15,7 +15,7 @@ class ForecasterAgent(BaseAgent):
 
     AGENT_NAME = "forecaster"
     AGENT_ROLE = "forecaster"
-    DEFAULT_MODEL = "grok-4-1-fast-reasoning"
+    DEFAULT_MODEL = "x-ai/grok-4-1-fast-reasoning"
 
     SYSTEM_PROMPT = (
         "You are a world-class probability forecaster specialising in prediction "
