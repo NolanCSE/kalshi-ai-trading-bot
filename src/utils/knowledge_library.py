@@ -1,20 +1,19 @@
 """
-Knowledge Library RAG System - Direct sentence-transformers Implementation.
+Knowledge Library RAG System - Supabase pgvector Implementation.
 
-Uses local embeddings without heavy dependencies.
-Benefits: Zero API cost, ~5x faster, sublinear search with HNSW.
+Uses Supabase pgvector for semantic search.
+Benefits: Cloud-based, no local memory issues, scales automatically.
 """
 
-import pickle
+import json
+import httpx
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 import yaml
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 
 logger = get_trading_logger("knowledge_library")
@@ -32,37 +31,35 @@ class RetrievedPassage:
 
 class KnowledgeLibrary:
     """
-    Manages RAG-based knowledge retrieval using sentence-transformers.
+    Manages RAG-based knowledge retrieval using Supabase pgvector.
 
     Features:
-    - Local sentence-transformers embeddings (zero cost)
-    - HNSW index for sublinear search
+    - Supabase + pgvector for vector storage and search
+    - OpenAI text-embedding-3-small (1536 dimensions)
     - Semantic chunking
-    - Persistent index caching
+    - Persistent storage in Supabase
     """
 
-    EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
-    EMBEDDING_DIM = 384
+    EMBEDDING_MODEL = "text-embedding-3-small"
+    EMBEDDING_DIM = 1536
+    TABLE_NAME = "knowledge_chunks"
 
     def __init__(self, config_path: str = "config/worldview.yaml"):
         self.config = self._load_config(config_path)
         self.library_path = Path(
             self.config.get("knowledge_library", {}).get("library_path", "library/")
         )
-        self.cache_dir = Path(".cache/knowledge_library")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         rag_settings = self.config.get("knowledge_library", {}).get("rag_settings", {})
         self.top_k = rag_settings.get("top_k_retrieval", 5)
         self.similarity_threshold = rag_settings.get("similarity_threshold", 0.5)
 
-        self.model: Optional[SentenceTransformer] = None
-        self.index: Optional[faiss.Index] = None
+        self.supabase = None
         self.chunks: List[Dict] = []
         self.initialized = False
 
         logger.info(
-            "KnowledgeLibrary initialized (sentence-transformers)",
+            "KnowledgeLibrary initialized (Supabase pgvector)",
             library_path=str(self.library_path),
         )
 
@@ -74,28 +71,96 @@ class KnowledgeLibrary:
             logger.error(f"Failed to load config: {e}")
             return {}
 
+    def _get_supabase_client(self):
+        """Get or create Supabase client."""
+        if self.supabase is None:
+            from supabase import create_client
+            
+            supabase_url = settings.api.supabase_url
+            supabase_key = settings.api.supabase_anon_key
+            
+            if not supabase_url or not supabase_key:
+                raise ValueError("Supabase URL and anon key must be configured")
+            
+            self.supabase = create_client(supabase_url, supabase_key)
+        return self.supabase
+
+    def _generate_embeddings_sync(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using OpenAI API (synchronous)."""
+        embeddings = []
+        batch_size = 100
+        
+        headers = {
+            "Authorization": f"Bearer {settings.api.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        with httpx.Client(timeout=60.0) as client:
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                
+                response = client.post(
+                    f"{settings.api.openai_base_url}/embeddings",
+                    headers=headers,
+                    json={
+                        "model": self.EMBEDDING_MODEL,
+                        "input": batch
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                for embedding_data in data["data"]:
+                    embeddings.append(embedding_data["embedding"])
+        
+        return embeddings
+
+    def _get_query_embedding_sync(self, query: str) -> List[float]:
+        """Generate embedding for a query string (synchronous)."""
+        headers = {
+            "Authorization": f"Bearer {settings.api.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{settings.api.openai_base_url}/embeddings",
+                headers=headers,
+                json={
+                    "model": self.EMBEDDING_MODEL,
+                    "input": query
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            return data["data"][0]["embedding"]
+
     async def initialize(self) -> bool:
         if self.initialized:
             return True
 
-        if await self._load_cached_index():
-            logger.info("Loaded cached index")
-            self.initialized = True
-            return True
-
-        logger.info("Building index from documents...")
-        success = await self._build_index()
-        self.initialized = success
-        return success
-
-    def _load_embedding_model(self) -> SentenceTransformer:
-        """Load or return cached embedding model."""
-        if self.model is None:
-            logger.info(f"Loading embedding model: {self.EMBEDDING_MODEL}")
-            self.model = SentenceTransformer(
-                self.EMBEDDING_MODEL, cache_folder=".cache/embeddings"
-            )
-        return self.model
+        client = self._get_supabase_client()
+        
+        try:
+            result = client.table(self.TABLE_NAME).select("id").execute()
+            
+            if result.data:
+                logger.info(f"Found {len(result.data)} chunks in Supabase")
+                self.chunks = [{"id": row["id"]} for row in result.data]
+                self.initialized = True
+                return True
+            
+            logger.info("No existing chunks in Supabase, building index...")
+            success = self._build_index_sync()
+            self.initialized = success
+            return success
+            
+        except Exception as e:
+            logger.warning(f"Failed to load from Supabase, building fresh index: {e}")
+            success = self._build_index_sync()
+            self.initialized = success
+            return success
 
     def _scan_documents(self) -> List[tuple]:
         """Scan library directory for documents."""
@@ -167,7 +232,6 @@ class KnowledgeLibrary:
             sentence_len = len(sentence)
             if current_length + sentence_len > chunk_size and current_chunk:
                 chunks.append(" ".join(current_chunk))
-                # Keep overlap by taking last sentences
                 overlap_text = (
                     " ".join(current_chunk[-2:]) if len(current_chunk) >= 2 else ""
                 )
@@ -186,8 +250,8 @@ class KnowledgeLibrary:
 
         return [c.strip() for c in chunks if c.strip()]
 
-    async def _build_index(self) -> bool:
-        """Build FAISS index from documents."""
+    def _build_index_sync(self) -> bool:
+        """Build index from documents and store in Supabase (synchronous)."""
         try:
             documents = self._scan_documents()
 
@@ -197,10 +261,6 @@ class KnowledgeLibrary:
 
             logger.info(f"Found {len(documents)} documents to index")
 
-            # Load embedding model
-            model = self._load_embedding_model()
-
-            # Process documents
             all_chunks = []
             for doc_path, category, tags in documents:
                 text = self._extract_text(doc_path)
@@ -214,7 +274,7 @@ class KnowledgeLibrary:
                             "text": chunk_text,
                             "source": str(doc_path),
                             "category": category,
-                            "tags": tags,
+                            "tags": json.dumps(tags),
                             "chunk_index": i,
                             "total_chunks": len(chunks),
                         }
@@ -226,75 +286,36 @@ class KnowledgeLibrary:
 
             logger.info(f"Generated {len(all_chunks)} chunks")
 
-            # Generate embeddings
             texts = [c["text"] for c in all_chunks]
-            logger.info("Generating embeddings...")
-            embeddings = model.encode(
-                texts, show_progress_bar=True, normalize_embeddings=True
-            )
+            logger.info("Generating embeddings via OpenAI...")
+            embeddings = self._generate_embeddings_sync(texts)
 
-            # Build HNSW index for sublinear search
-            logger.info("Building HNSW index...")
-            faiss_index = faiss.IndexHNSWFlat(self.EMBEDDING_DIM, 32)
-            faiss_index.hnsw.efConstruction = 200
-            faiss_index.hnsw.efSearch = 64
-            faiss_index.add(embeddings.astype("float32"))
+            client = self._get_supabase_client()
+            
+            logger.info("Storing chunks and embeddings in Supabase...")
+            
+            batch_size = 100
+            for i in range(0, len(all_chunks), batch_size):
+                batch = all_chunks[i:i + batch_size]
+                batch_embeddings = embeddings[i:i + batch_size]
+                
+                records = []
+                for chunk, embedding in zip(batch, batch_embeddings):
+                    record = chunk.copy()
+                    record["embedding"] = embedding
+                    records.append(record)
+                
+                client.table(self.TABLE_NAME).insert(records).execute()
+                
+                logger.info(f"Inserted batch {i//batch_size + 1}/{(len(all_chunks) + batch_size - 1)//batch_size}")
 
-            self.index = faiss_index
             self.chunks = all_chunks
 
-            # Save cache
-            await self._save_cached_index()
-
-            logger.info("Index built successfully")
+            logger.info(f"Index built successfully with {len(all_chunks)} chunks")
             return True
 
         except Exception as e:
             logger.error(f"Failed to build index: {e}", exc_info=True)
-            return False
-
-    async def _load_cached_index(self) -> bool:
-        """Load cached FAISS index."""
-        index_path = self.cache_dir / "faiss_hnsw.index"
-        chunks_path = self.cache_dir / "chunks.pkl"
-
-        if not index_path.exists() or not chunks_path.exists():
-            return False
-
-        try:
-            self.index = faiss.read_index(str(index_path))
-
-            with open(chunks_path, "rb") as f:
-                self.chunks = pickle.load(f)
-
-            # Load embedding model for queries
-            self._load_embedding_model()
-
-            logger.info(f"Loaded cached index with {len(self.chunks)} chunks")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to load cached index: {e}")
-            return False
-
-    async def _save_cached_index(self) -> bool:
-        """Save FAISS index and chunks to cache."""
-        if self.index is None or not self.chunks:
-            return False
-
-        try:
-            index_path = self.cache_dir / "faiss_hnsw.index"
-            chunks_path = self.cache_dir / "chunks.pkl"
-
-            faiss.write_index(self.index, str(index_path))
-
-            with open(chunks_path, "wb") as f:
-                pickle.dump(self.chunks, f)
-
-            logger.info("Saved index to cache")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save index: {e}")
             return False
 
     async def retrieve_relevant_passages(
@@ -303,43 +324,41 @@ class KnowledgeLibrary:
         top_k: Optional[int] = None,
         category_filter: Optional[str] = None,
     ) -> List[RetrievedPassage]:
-        if not self.initialized or self.index is None:
+        if not self.initialized:
             logger.warning("Knowledge library not initialized")
             return []
 
         top_k = top_k or self.top_k
 
         try:
-            # Generate query embedding
-            query_embedding = self.model.encode([query], normalize_embeddings=True)
-
-            # Search index
-            search_k = top_k * 3  # Get extra for filtering
-            scores, indices = self.index.search(
-                query_embedding.astype("float32"), search_k
-            )
-
-            # Parse results
+            query_embedding = self._get_query_embedding_sync(query)
+            
+            client = self._get_supabase_client()
+            
+            search_k = top_k * 3
+            
+            result = client.rpc("match_knowledge_chunks", {
+                "query_embedding": query_embedding,
+                "match_threshold": self.similarity_threshold,
+                "match_count": search_k
+            }).execute()
+            
             passages = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx == -1 or idx >= len(self.chunks):
+            for row in result.data:
+                if category_filter and row.get("category") != category_filter:
                     continue
-
-                chunk = self.chunks[idx]
-
-                # Apply filters
-                if score < self.similarity_threshold:
-                    continue
-
-                if category_filter and chunk["category"] != category_filter:
+                
+                similarity = row.get("similarity", 0)
+                
+                if similarity < self.similarity_threshold:
                     continue
 
                 passages.append(
                     RetrievedPassage(
-                        text=chunk["text"][:1000],
-                        source=chunk["source"],
-                        category=chunk["category"],
-                        similarity_score=float(score),
+                        text=row["text"][:1000],
+                        source=row["source"],
+                        category=row["category"],
+                        similarity_score=float(similarity),
                     )
                 )
 
@@ -356,7 +375,13 @@ class KnowledgeLibrary:
     async def refresh_index(self) -> bool:
         """Rebuild index from scratch."""
         logger.info("Refreshing knowledge library index...")
-        self.index = None
+        
+        try:
+            client = self._get_supabase_client()
+            client.table(self.TABLE_NAME).delete().neq("id", 0).execute()
+        except Exception as e:
+            logger.warning(f"Failed to clear table: {e}")
+        
         self.chunks = []
         self.initialized = False
         return await self.initialize()
@@ -365,14 +390,13 @@ class KnowledgeLibrary:
         return {
             "initialized": self.initialized,
             "num_chunks": len(self.chunks),
-            "index_size": self.index.ntotal if self.index else 0,
             "library_path": str(self.library_path),
+            "storage": "supabase",
         }
 
 
-# Backward compatibility exports
-FAISS_AVAILABLE = True
-OPENAI_AVAILABLE = True  # For test compatibility, actual embedding is local
+FAISS_AVAILABLE = False
+OPENAI_AVAILABLE = True
 PYMUPDF_AVAILABLE = True
 
 

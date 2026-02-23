@@ -63,28 +63,28 @@ def print_header(text: str) -> None:
 
 def print_section(text: str) -> None:
     """Print a section header."""
-    print(f"\n{Colors.BOLD}{Colors.BLUE}▶ {text}{Colors.RESET}")
-    print(f"{Colors.BLUE}{'─'*50}{Colors.RESET}")
+    print(f"\n{Colors.BOLD}{Colors.BLUE}> {text}{Colors.RESET}")
+    print(f"{Colors.BLUE}{'-'*50}{Colors.RESET}")
 
 
 def print_success(text: str) -> None:
     """Print a success message."""
-    print(f"{Colors.GREEN}✓ {text}{Colors.RESET}")
+    print(f"{Colors.GREEN}[OK] {text}{Colors.RESET}")
 
 
 def print_error(text: str) -> None:
     """Print an error message."""
-    print(f"{Colors.RED}✗ {text}{Colors.RESET}")
+    print(f"{Colors.RED}[X] {text}{Colors.RESET}")
 
 
 def print_warning(text: str) -> None:
     """Print a warning message."""
-    print(f"{Colors.YELLOW}⚠ {text}{Colors.RESET}")
+    print(f"{Colors.YELLOW}[!] {text}{Colors.RESET}")
 
 
 def print_info(text: str) -> None:
     """Print an info message."""
-    print(f"{Colors.CYAN}ℹ {text}{Colors.RESET}")
+    print(f"{Colors.CYAN}[i] {text}{Colors.RESET}")
 
 
 async def test_dependencies() -> bool:
@@ -128,7 +128,7 @@ async def test_document_discovery(library: KnowledgeLibrary) -> List[tuple]:
     print_success(f"Found {len(documents)} document(s)")
     
     for doc_path, category, tags in documents:
-        print(f"  {Colors.CYAN}•{Colors.RESET} {doc_path.name}")
+        print(f"  {Colors.CYAN}*{Colors.RESET} {doc_path.name}")
         print(f"    Category: {Colors.YELLOW}{category}{Colors.RESET}")
         print(f"    Tags: {Colors.YELLOW}{', '.join(tags) if tags else 'none'}{Colors.RESET}")
         print(f"    Path: {doc_path}")
@@ -411,11 +411,11 @@ def print_summary(results: Dict[str, Any]) -> None:
     print(f"\n{Colors.BOLD}Overall: {passed_tests}/{total_tests} tests passed{Colors.RESET}")
     
     if passed_tests == total_tests:
-        print(f"\n{Colors.GREEN}{Colors.BOLD}✓ All tests passed! Knowledge library is working correctly.{Colors.RESET}")
+        print(f"\n{Colors.GREEN}{Colors.BOLD}[OK] All tests passed! Knowledge library is working correctly.{Colors.RESET}")
     elif passed_tests >= total_tests / 2:
-        print(f"\n{Colors.YELLOW}{Colors.BOLD}⚠ Some tests failed. Knowledge library may have limited functionality.{Colors.RESET}")
+        print(f"\n{Colors.YELLOW}{Colors.BOLD}[!] Some tests failed. Knowledge library may have limited functionality.{Colors.RESET}")
     else:
-        print(f"\n{Colors.RED}{Colors.BOLD}✗ Most tests failed. Knowledge library is not working correctly.{Colors.RESET}")
+        print(f"\n{Colors.RED}{Colors.BOLD}[X] Most tests failed. Knowledge library is not working correctly.{Colors.RESET}")
 
 
 async def main():
