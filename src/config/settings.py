@@ -24,6 +24,7 @@ class APIConfig:
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     supabase_url: str = field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
     supabase_anon_key: str = field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
+    encryption_key: str = field(default_factory=lambda: os.getenv("ENCRYPTION_KEY", ""))
 
 
 @dataclass

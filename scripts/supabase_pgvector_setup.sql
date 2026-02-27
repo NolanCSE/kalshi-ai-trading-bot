@@ -9,10 +9,12 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id BIGSERIAL PRIMARY KEY,
     text TEXT NOT NULL,
     source TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
     category TEXT NOT NULL,
     tags JSONB DEFAULT '[]',
     chunk_index INTEGER NOT NULL,
     total_chunks INTEGER NOT NULL,
+    page_number TEXT,
     embedding vector(1536),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -37,10 +39,12 @@ RETURNS TABLE (
     id bigint,
     text text,
     source text,
+    source_hash text,
     category text,
     tags jsonb,
     chunk_index int,
     total_chunks int,
+    page_number text,
     similarity float
 )
 LANGUAGE plpgsql
@@ -51,10 +55,12 @@ BEGIN
         kc.id,
         kc.text,
         kc.source,
+        kc.source_hash,
         kc.category,
         kc.tags,
         kc.chunk_index,
         kc.total_chunks,
+        kc.page_number,
         1 - (kc.embedding <=> query_embedding) AS similarity
     FROM knowledge_chunks kc
     WHERE 1 - (kc.embedding <=> query_embedding) > match_threshold

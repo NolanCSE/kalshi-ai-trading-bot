@@ -218,17 +218,26 @@ class KnowledgeResearcher(BaseAgent):
         
         return "\n".join(lines) if lines else "No worldview context configured"
     
-    def _build_knowledge_context(self, passages: List[RetrievedPassage]) -> List[Dict]:
-        """Build structured context from retrieved passages."""
+    def _build_knowledge_context(self, passages: List[RetrievedPassage]) -> str:
+        """Build readable context from retrieved passages."""
         if not passages:
-            return []
+            return "No relevant knowledge passages found."
         
+        lines = ["=== RELEVANT KNOWLEDGE ===\n"]
+        
+        for i, p in enumerate(passages, 1):
+            lines.append(f"\n--- Passage {i} ---\n")
+            lines.append(p.text)
+        
+        return "".join(lines)
+    
+    def _build_citations(self, passages: List[RetrievedPassage]) -> List[Dict]:
+        """Build citation info for logging."""
         return [
             {
-                "text": p.text[:500],  # Truncate long passages
                 "source": p.source,
-                "category": p.category,
-                "relevance": p.similarity_score
+                "page_number": p.page_number,
+                "relevance_score": p.similarity_score
             }
             for p in passages
         ]
@@ -355,9 +364,10 @@ Return your research as a JSON object inside a ```json``` code block.
                 return self._error_result(f"Failed to extract JSON: {raw_response[:300]}")
             
             result = self._parse_result(parsed)
-            
+
             # Add passages to result
             result["retrieved_passages"] = passages_context
+            result["knowledge_citations"] = self._build_citations(passages)
             result["news_summary"] = news_summary[:500]  # Truncate
             
             # Add metadata
