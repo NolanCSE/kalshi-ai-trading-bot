@@ -233,6 +233,19 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                     await db_manager.add_trade_log(trade_log)
                     await db_manager.update_position_status(position.id, 'closed')
                     
+                    # Update prediction record with actual result
+                    try:
+                        actual_result = market_result if market_result else ("YES" if position.side == "YES" and exit_price > 0.5 else "NO" if position.side == "NO" and exit_price < 0.5 else "UNKNOWN")
+                        await db_manager.update_prediction_resolution(
+                            market_id=position.market_id,
+                            actual_result=actual_result,
+                            pnl=pnl,
+                            position_id=position.id
+                        )
+                        logger.info(f"Updated prediction record for market {position.market_id} with result: {actual_result}")
+                    except Exception as e:
+                        logger.warning(f"Failed to update prediction resolution: {e}")
+                    
                     exits_executed += 1
                     logger.info(
                         f"Position for market {position.market_id} closed via {exit_reason}. "

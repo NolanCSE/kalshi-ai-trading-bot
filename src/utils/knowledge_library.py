@@ -10,7 +10,8 @@ import gc
 import hashlib
 import httpx
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 from dataclasses import dataclass
 
 import yaml
@@ -31,6 +32,15 @@ class RetrievedPassage:
     category: str
     similarity_score: float
     page_number: Optional[int] = None
+
+
+@dataclass
+class WebArticle:
+    """Represents a web article found through search."""
+    url: str
+    title: str
+    snippet: str
+    relevance_score: float = 0.0
 
 
 class KnowledgeLibrary:
@@ -57,6 +67,11 @@ class KnowledgeLibrary:
         rag_settings = self.config.get("knowledge_library", {}).get("rag_settings", {})
         self.top_k = rag_settings.get("top_k_retrieval", 5)
         self.similarity_threshold = rag_settings.get("similarity_threshold", 0.5)
+
+        web_research_config = self.config.get("web_research", {})
+        self.web_research_enabled = web_research_config.get("enabled", True)
+        self.target_domains = web_research_config.get("target_domains", [])
+        self.max_articles_per_market = web_research_config.get("ingestion", {}).get("max_articles_per_market", 10)
 
         self.supabase = None
         self.chunk_count = 0
@@ -382,8 +397,197 @@ class KnowledgeLibrary:
         logger.info(f"Completed {doc_path.name}: {total_inserted} chunks")
         return total_inserted
 
+    def _generate_url_hash(self, url: str) -> str:
+        """Generate a hash from URL for deduplication."""
+        return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+    def check_url_exists(self, url: str) -> bool:
+        """Check if a URL has already been ingested into the database.
+        
+        Returns True if chunks for this URL already exist.
+        """
+        try:
+            url_hash = self._generate_url_hash(url)
+            client = self._get_supabase_client()
+            result = client.table(self.TABLE_NAME).select("id").eq("source_hash", url_hash).limit(1).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Failed to check URL existence: {e}")
+            return False
+
+    def fetch_web_article(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Fetch and extract clean text from a web article URL.
+        
+        Uses trafilatura for clean article extraction.
+        
+        Returns:
+            Tuple of (extracted_text, title) or (None, None) on failure.
+        """
+        try:
+            import trafilatura
+            
+            timeout = self.config.get("web_research", {}).get("search", {}).get("timeout_seconds", 30)
+            
+            downloaded = trafilatura.fetch_url(url)
+            
+            if not downloaded:
+                logger.warning(f"Failed to download article: {url}")
+                return None, None
+            
+            result = trafilatura.extract(
+                downloaded,
+                include_comments=False,
+                include_tables=True,
+                output_format="json"
+            )
+            
+            if not result:
+                result = trafilatura.extract(downloaded, output_format="text")
+                if result:
+                    return result, downloaded[:200].split('<title>')[-1].split('</title>')[0] if '<title>' in downloaded else "Unknown"
+                return None, None
+            
+            import json
+            data = json.loads(result)
+            text = data.get("text", "")
+            title = data.get("title", "")
+            
+            if not text:
+                logger.warning(f"No text extracted from: {url}")
+                return None, None
+                
+            logger.info(f"Extracted {len(text)} chars from {url}")
+            return text, title
+            
+        except ImportError:
+            logger.error("trafilatura not installed. Run: pip install trafilatura")
+            return None, None
+        except Exception as e:
+            logger.error(f"Failed to fetch web article {url}: {e}")
+            return None, None
+
+    async def ingest_web_url(
+        self,
+        url: str,
+        category: str = "web_articles",
+        force_reingest: bool = False
+    ) -> int:
+        """Ingest a web URL into the knowledge library.
+        
+        Checks for existing chunks (deduplication), fetches the article,
+        chunks it, embeds it, and stores in Supabase.
+        
+        Args:
+            url: The URL of the web article to ingest
+            category: Category for the article (default: web_articles)
+            force_reingest: If True, re-ingest even if already exists
+            
+        Returns:
+            Number of chunks inserted, or 0 if skipped/already exists
+        """
+        if not force_reingest and self.check_url_exists(url):
+            logger.info(f"URL already exists in database, skipping: {url}")
+            return 0
+        
+        text, title = self.fetch_web_article(url)
+        
+        if not text or not text.strip():
+            logger.warning(f"No text fetched from {url}, skipping")
+            return 0
+        
+        tags = [title] if title else []
+        
+        all_chunks = self._chunk_text(text)
+        total_chunks = len(all_chunks)
+        
+        if total_chunks == 0:
+            return 0
+        
+        logger.info(f"Chunking {url} into {total_chunks} chunks")
+        
+        client = self._get_supabase_client()
+        
+        batch_size = 100
+        total_inserted = 0
+        
+        for batch_start in range(0, total_chunks, batch_size):
+            batch_end = min(batch_start + batch_size, total_chunks)
+            batch_chunks = all_chunks[batch_start:batch_end]
+            
+            batch_embeddings = self._generate_embeddings_sync(batch_chunks)
+            
+            records = []
+            for i, (chunk_text, embedding) in enumerate(zip(batch_chunks, batch_embeddings)):
+                records.append({
+                    "text": self._encryptor.encrypt(chunk_text),
+                    "source": self._encryptor.encrypt(url),
+                    "source_hash": self._generate_url_hash(url),
+                    "category": self._encryptor.encrypt(category),
+                    "tags": json.dumps(tags),
+                    "chunk_index": batch_start + i,
+                    "total_chunks": total_chunks,
+                    "page_number": None,
+                    "embedding": embedding,
+                })
+            
+            client.table(self.TABLE_NAME).insert(records).execute()
+            total_inserted += len(records)
+            
+            logger.info(f"Inserted batch {batch_start//batch_size + 1}: {total_inserted}/{total_chunks} chunks")
+            
+            del batch_embeddings
+            gc.collect()
+        
+        self._existing_sources.add(self._generate_url_hash(url))
+        
+        logger.info(f"Completed ingesting {url}: {total_inserted} chunks")
+        return total_inserted
+
+    async def ingest_multiple_urls(
+        self,
+        urls: List[str],
+        category: str = "web_articles",
+        max_to_ingest: Optional[int] = None
+    ) -> Dict[str, int]:
+        """Ingest multiple web URLs, skipping duplicates.
+        
+        Args:
+            urls: List of URLs to ingest
+            category: Category for the articles
+            max_to_ingest: Maximum number of new articles to ingest
+            
+        Returns:
+            Dict with 'ingested' count, 'skipped' count, and 'failed' count
+        """
+        stats = {"ingested": 0, "skipped": 0, "failed": 0}
+        
+        unique_urls = list(set(urls))
+        
+        if max_to_ingest:
+            unique_urls = unique_urls[:max_to_ingest]
+        
+        logger.info(f"Processing {len(unique_urls)} URLs for ingestion")
+        
+        for url in unique_urls:
+            try:
+                chunks = await self.ingest_web_url(url, category)
+                if chunks > 0:
+                    stats["ingested"] += 1
+                else:
+                    stats["skipped"] += 1
+            except Exception as e:
+                logger.error(f"Failed to ingest {url}: {e}")
+                stats["failed"] += 1
+        
+        logger.info(f"Web ingestion complete: {stats}")
+        return stats
+
     def _build_index_incremental(self) -> bool:
-        """Build index incrementally: only process new/partial documents."""
+        """Build index incrementally: only process new/partial documents.
+        
+        Optimization: If existing chunks are found in DB (>100), skip expensive incremental
+        checks to avoid Supabase timeouts. Use refresh_index() manually when needed.
+        """
         try:
             documents = self._scan_documents()
 
@@ -394,7 +598,17 @@ class KnowledgeLibrary:
             logger.info(f"Found {len(documents)} documents to check")
 
             # Get existing sources from DB
-            self._existing_sources = self._load_existing_sources()
+            # Skip expensive check if we already have many chunks to avoid timeout
+            if self.chunk_count > 100:
+                logger.info(f"Already have {self.chunk_count} chunks - skipping incremental check to avoid timeout. Use refresh_index() to manually rebuild.")
+                return True
+            
+            try:
+                self._existing_sources = self._load_existing_sources()
+            except Exception as e:
+                logger.warning(f"Failed to load existing sources (timeout?), skipping incremental check: {e}")
+                self._existing_sources = set()
+            
             current_sources = {str(doc[0]) for doc in documents}
             
             # Find documents that need processing (new or partially indexed)
@@ -404,22 +618,22 @@ class KnowledgeLibrary:
                 doc_path_str = str(doc[0])
                 doc_hash = hashlib.sha256(doc_path_str.encode()).hexdigest()[:16]
                 if doc_hash not in self._existing_sources:
-                    # New document
                     docs_to_process.append(doc)
                 else:
-                    # Check if fully indexed by looking at max chunk_index
-                    max_idx = self._get_max_chunk_index(doc_path_str)
-                    # Total chunks expected (will need to re-extract to know exact)
-                    # For now, assume if it exists it might be partial - we'll check inside
-                    docs_to_process.append(doc)
+                    if len(self._existing_sources) < 100:
+                        max_idx = self._get_max_chunk_index(doc_path_str)
+                        docs_to_process.append(doc)
             
             # Find documents to remove (in DB but not on disk)
             sources_to_remove = self._existing_sources - current_sources
 
             # Remove deleted documents
             for source_hash in sources_to_remove:
-                deleted = self._delete_chunks_by_hash(source_hash)
-                logger.info(f"Removed {deleted} chunks for deleted file: {source_hash}")
+                try:
+                    deleted = self._delete_chunks_by_hash(source_hash)
+                    logger.info(f"Removed {deleted} chunks for deleted file: {source_hash}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove chunks for {source_hash}: {e}")
 
             if not docs_to_process:
                 logger.info("No documents to process")

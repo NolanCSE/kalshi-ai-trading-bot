@@ -153,6 +153,35 @@ knowledge_library:
     - ".md"
     - ".txt"
 
+# Web research configuration - search and ingest articles from specified websites
+web_research:
+  enabled: true  # Set to false to disable web research
+  
+  # Target domains to search for articles
+  # The agent will search "site:domain.com query" for relevant articles
+  target_domains:
+    - "mises.org"
+    - "unz.com"
+    - "antiwar.com"
+    - "airwars.org"
+  
+  # Search settings
+  search:
+    max_results_per_query: 5  # Number of articles to fetch per search
+    timeout_seconds: 30       # Timeout for each web request
+    
+  # Article ingestion settings
+  ingestion:
+    auto_ingest: true        # Automatically ingest found articles into knowledge library
+    max_articles_per_market: 10  # Max new articles to ingest per market analysis
+    skip_existing: true      # Skip articles already in database (deduplication)
+  
+  # Categories for web articles
+  categories:
+    - name: "web_articles"
+      description: "Articles fetched from the web"
+      relevance_domains: ["general", "news", "analysis"]
+
 # Applicable market categories
 # The ideology agent only applies to markets in these categories
 applicable_categories:
