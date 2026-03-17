@@ -1,0 +1,74 @@
+# =============================================================================
+# kalshi-mcp-tunnel.service — WSL systemd unit
+#
+# Keeps the MCP server + GCE reverse tunnel running automatically.
+# Install this if you want the tunnel to start whenever WSL boots
+# (e.g. after a Windows restart) without you having to run it manually.
+#
+# Installation (run once in WSL):
+#
+#   # 1. Confirm systemd is enabled in WSL2
+#   #    If this prints "systemd", you're good. If not, see note below.
+#   ps -p 1 -o comm=
+#
+#   # 2. Copy the unit file
+#   sudo cp /home/Nolan/projects/kalshi-ai-trading-bot/scripts/kalshi-mcp-tunnel.service \
+#           /etc/systemd/system/kalshi-mcp-tunnel.service
+#
+#   # 3. Edit the three placeholder values (see [Service] section below)
+#   sudo nano /etc/systemd/system/kalshi-mcp-tunnel.service
+#
+#   # 4. Enable and start
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kalshi-mcp-tunnel
+#
+#   # 5. Check logs
+#   journalctl -u kalshi-mcp-tunnel -f
+#
+# ── Enabling systemd in WSL2 (if not already on) ─────────────────────────────
+# Add these two lines to /etc/wsl.conf (create it if it doesn't exist):
+#
+#   [boot]
+#   systemd=true
+#
+# Then restart WSL from PowerShell:  wsl --shutdown
+# =============================================================================
+
+[Unit]
+Description=Kalshi MCP Server + GCE Reverse SSH Tunnel
+# Don't start until the network is up (needed for gcloud IAP tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ── EDIT THESE THREE VALUES ───────────────────────────────────────────────────
+Environment=GCP_PROJECT=YOUR_GCP_PROJECT
+Environment=VM_INSTANCE=YOUR_VM_INSTANCE
+Environment=ZONE=us-central1-a
+# ─────────────────────────────────────────────────────────────────────────────
+
+User=Nolan
+WorkingDirectory=/home/Nolan/projects/kalshi-ai-trading-bot
+
+ExecStart=/home/Nolan/projects/kalshi-ai-trading-bot/scripts/tunnel_mcp.sh \
+    ${GCP_PROJECT} \
+    ${VM_INSTANCE} \
+    ${ZONE}
+
+# Restart the whole thing (server + tunnel) if it exits for any reason
+Restart=on-failure
+RestartSec=20s
+
+# Give the MCP server + gcloud IAP handshake time to come up
+TimeoutStartSec=120s
+# Give active analyze_market calls time to finish before killing
+TimeoutStopSec=90s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kalshi-mcp-tunnel
+
+[Install]
+WantedBy=multi-user.target
