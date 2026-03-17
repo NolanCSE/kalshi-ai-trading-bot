@@ -38,7 +38,8 @@ class KalshiClient(TradingLoggerMixin):
         api_key: Optional[str] = None, 
         private_key_path: str = "kalshi_private_key",
         max_retries: int = 5,
-        backoff_factor: float = 0.5
+        backoff_factor: float = 0.5,
+        read_only: bool = False,
     ):
         """
         Initialize Kalshi client.
@@ -48,6 +49,10 @@ class KalshiClient(TradingLoggerMixin):
             private_key_path: Path to private key file
             max_retries: Maximum number of retries for failed requests
             backoff_factor: Factor for exponential backoff
+            read_only: If True, skip private key loading.  Only GET (market
+                       data) endpoints work; any attempt to place orders will
+                       raise KalshiAPIError.  Useful for the MCP server and
+                       other read-only analysis contexts.
         """
         self.api_key = api_key or settings.api.kalshi_api_key
         self.base_url = settings.api.kalshi_base_url
@@ -55,9 +60,13 @@ class KalshiClient(TradingLoggerMixin):
         self.private_key = None
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
-        
-        # Load private key
-        self._load_private_key()
+        self._read_only = read_only
+
+        if read_only:
+            self.logger.info("Running in read-only mode — no private key required for reads")
+        else:
+            # Load private key — will raise if missing
+            self._load_private_key()
         
         # HTTP client with timeouts
         self.client = httpx.AsyncClient(
@@ -146,17 +155,21 @@ class KalshiClient(TradingLoggerMixin):
         
         # Add authentication headers if required
         if require_auth:
-            # Get current timestamp in milliseconds
-            timestamp = str(int(time.time() * 1000))
-            
-            # Create signature
-            signature = self._sign_request(timestamp, method, endpoint)
-            
-            headers.update({
-                "KALSHI-ACCESS-KEY": self.api_key,
-                "KALSHI-ACCESS-TIMESTAMP": timestamp,
-                "KALSHI-ACCESS-SIGNATURE": signature
-            })
+            if self._read_only or self.private_key is None:
+                # Read-only mode: attach API key only (no signing).
+                # Kalshi's market data endpoints accept unauthenticated or
+                # key-only requests for GET calls.
+                if self.api_key:
+                    headers["KALSHI-ACCESS-KEY"] = self.api_key
+            else:
+                # Full auth: RSA-PSS signed request
+                timestamp = str(int(time.time() * 1000))
+                signature = self._sign_request(timestamp, method, endpoint)
+                headers.update({
+                    "KALSHI-ACCESS-KEY": self.api_key,
+                    "KALSHI-ACCESS-TIMESTAMP": timestamp,
+                    "KALSHI-ACCESS-SIGNATURE": signature,
+                })
         
         # Prepare body
         body = None

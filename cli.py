@@ -139,6 +139,28 @@ def cmd_status(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_mcp(args: argparse.Namespace) -> None:
+    """Start the MCP server for use with OpenClaw / Claude Desktop agents."""
+    from src.mcp_server import mcp
+
+    transport = getattr(args, "transport", "stdio")
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 8765)
+
+    if transport == "stdio":
+        print(
+            "Starting MCP server on stdio — connect via Claude Desktop or OpenClaw.",
+            file=sys.stderr,
+        )
+        mcp.run(transport="stdio")
+    else:
+        print(
+            f"Starting MCP server on http://{host}:{port} (streamable-http)",
+            file=sys.stderr,
+        )
+        mcp.run(transport="streamable-http", host=host, port=port)
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     """Run backtests (placeholder)."""
     print("=" * 56)
@@ -261,11 +283,13 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  python cli.py run --paper        Start in paper-trading mode\n"
-            "  python cli.py run --live          Start in live-trading mode\n"
-            "  python cli.py dashboard           Open the monitoring dashboard\n"
-            "  python cli.py status              Check portfolio balance and positions\n"
-            "  python cli.py health              Verify all connections and config\n"
+            "  python cli.py run --paper                  Start in paper-trading mode\n"
+            "  python cli.py run --live                   Start in live-trading mode\n"
+            "  python cli.py dashboard                    Open the monitoring dashboard\n"
+            "  python cli.py status                       Check portfolio balance and positions\n"
+            "  python cli.py health                       Verify all connections and config\n"
+            "  python cli.py mcp                          Start MCP server on stdio (Claude Desktop / OpenClaw)\n"
+            "  python cli.py mcp --transport streamable-http --port 8765  Start MCP server over HTTP\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -311,6 +335,38 @@ def build_parser() -> argparse.ArgumentParser:
         description="Connect to the Kalshi API and display current account balance, open positions, and estimated portfolio value.",
     )
     p_status.set_defaults(func=cmd_status)
+
+    # --- mcp ---
+    p_mcp = subparsers.add_parser(
+        "mcp",
+        help="Start the MCP server (for OpenClaw / Claude Desktop agents)",
+        description=(
+            "Expose the Kalshi analysis pipeline as MCP tools so an orchestrating "
+            "agent can call list_markets, get_market_ladder, and analyze_market "
+            "on demand and engage in follow-up conversation about the results."
+        ),
+    )
+    p_mcp.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help=(
+            "Transport layer.  'stdio' for Claude Desktop / OpenClaw process-based "
+            "connections (default).  'streamable-http' for remote/networked agents."
+        ),
+    )
+    p_mcp.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host for streamable-http transport (default: 127.0.0.1).",
+    )
+    p_mcp.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Bind port for streamable-http transport (default: 8765).",
+    )
+    p_mcp.set_defaults(func=cmd_mcp)
 
     # --- backtest ---
     p_bt = subparsers.add_parser(

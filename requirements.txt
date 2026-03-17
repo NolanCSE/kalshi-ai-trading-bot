@@ -67,6 +67,9 @@ feedparser>=6.0.0
 duckduckgo-search>=7.0.0  # Free web search for article discovery
 trafilatura>=1.6.0        # Clean article text extraction from HTML
 
+# MCP server (for OpenClaw / Claude Desktop agent integration)
+fastmcp>=3.1.0
+
 # Testing (optional)
 pytest==7.4.3
 pytest-asyncio==0.21.1

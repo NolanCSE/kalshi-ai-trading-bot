@@ -1,0 +1,42 @@
+# Systemd unit template for the Kalshi MCP Server.
+#
+# This file is written to /etc/systemd/system/kalshi-mcp.service on the VM
+# automatically by deploy_mcp.sh.  It is included here for reference.
+#
+# To inspect the live unit on the VM:
+#   sudo systemctl cat kalshi-mcp
+#
+# To edit it manually on the VM:
+#   sudo systemctl edit --full kalshi-mcp
+#   sudo systemctl daemon-reload && sudo systemctl restart kalshi-mcp
+
+[Unit]
+Description=Kalshi AI Trading Bot MCP Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as the deploying user — set by deploy_mcp.sh at install time
+User=YOUR_VM_USER
+WorkingDirectory=/home/YOUR_VM_USER/kalshi-mcp
+# Secrets are loaded from the .env file — never baked into the unit
+EnvironmentFile=/home/YOUR_VM_USER/kalshi-mcp/.env
+ExecStart=/home/YOUR_VM_USER/kalshi-mcp/venv/bin/python cli.py mcp \
+    --transport streamable-http \
+    --host 127.0.0.1 \
+    --port 8765
+# Restart on crash; give it 15 s before retrying
+Restart=on-failure
+RestartSec=15s
+# analyze_market takes up to 5 min — give the process time to finish cleanly
+TimeoutStopSec=60s
+# Allow up to 2 min for the server to start (Supabase/model init)
+TimeoutStartSec=120s
+# All output goes to the systemd journal (journalctl -u kalshi-mcp -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kalshi-mcp
+
+[Install]
+WantedBy=multi-user.target
