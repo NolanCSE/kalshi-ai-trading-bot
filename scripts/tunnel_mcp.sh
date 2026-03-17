@@ -44,6 +44,46 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$PROJECT_DIR/venv"
 PYTHON="$VENV/bin/python"
 
+# ── Resolve gcloud to an absolute path ───────────────────────────────────────
+# systemd runs with a minimal PATH that excludes the Cloud SDK bin directory.
+# We probe common install locations so the script works under systemd without
+# requiring Environment=PATH= to be exactly right in the unit file.
+# You can also override by setting GCLOUD_PATH before running the script.
+_find_gcloud() {
+    # Already on PATH (interactive shell, or Environment=PATH= in unit worked)
+    if command -v gcloud &>/dev/null; then
+        command -v gcloud
+        return
+    fi
+    # Common install locations: apt, manual user install, snap, homebrew-on-linux
+    local candidates=(
+        "/usr/lib/google-cloud-sdk/bin/gcloud"
+        "/usr/share/google-cloud-sdk/bin/gcloud"
+        "/snap/bin/gcloud"
+        "/home/giria/google-cloud-sdk/bin/gcloud"
+        "$HOME/google-cloud-sdk/bin/gcloud"
+        "/opt/google-cloud-sdk/bin/gcloud"
+        "/usr/local/lib/google-cloud-sdk/bin/gcloud"
+        "/usr/local/google-cloud-sdk/bin/gcloud"
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        [[ -x "$c" ]] && { echo "$c"; return; }
+    done
+    echo ""
+}
+
+GCLOUD="${GCLOUD_PATH:-$(_find_gcloud)}"
+if [[ -z "$GCLOUD" ]]; then
+    echo "ERROR: gcloud binary not found." >&2
+    echo "  Fix option 1 — set GCLOUD_PATH in the systemd unit:" >&2
+    echo "    Environment=GCLOUD_PATH=/full/path/to/gcloud" >&2
+    echo "  Fix option 2 — add gcloud's bin dir to PATH in the unit:" >&2
+    echo "    Environment=PATH=/your/sdk/bin:/usr/local/bin:/usr/bin:/bin" >&2
+    echo "  Find the path by running in your terminal:  which gcloud" >&2
+    exit 1
+fi
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 ts()   { date '+%H:%M:%S'; }
 info() { printf '[%s] \033[1;34m[tunnel]\033[0m %s\n' "$(ts)" "$*"; }
@@ -116,7 +156,7 @@ wait_for_mcp() {
 # transparently, so no external IP or open firewall rule is needed.
 start_tunnel() {
     info "Opening reverse tunnel: VM:$MCP_PORT ← local:$MCP_PORT (via IAP)..."
-    gcloud compute ssh "$VM_INSTANCE" \
+    "$GCLOUD" compute ssh "$VM_INSTANCE" \
         --project="$GCP_PROJECT" \
         --zone="$ZONE" \
         --tunnel-through-iap \
@@ -133,6 +173,7 @@ start_tunnel() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 info "Project dir: $PROJECT_DIR"
+info "gcloud:      $GCLOUD"
 info "GCP project: $GCP_PROJECT  VM: $VM_INSTANCE  Zone: $ZONE"
 
 start_mcp
