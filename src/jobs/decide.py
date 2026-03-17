@@ -380,6 +380,36 @@ async def make_decision_for_market(
             market.market_id, decision_action, confidence, total_analysis_cost
         )
 
+        # Record prediction for later review
+        try:
+            import json
+            from src.utils.database import PredictionRecord
+            
+            # Get the reasoning from the decision
+            trader_reasoning = getattr(decision, 'reasoning', f"Market: {market.title}, Decision: {decision_action} {decision.side if decision else 'N/A'}, Confidence: {confidence:.2f}")
+            
+            prediction = PredictionRecord(
+                market_id=market.market_id,
+                market_title=market.title,
+                category=market.category,
+                rules=rules,
+                created_at=datetime.now(),
+                predicted_probability=confidence,
+                predicted_side=decision.side if decision and hasattr(decision, 'side') else None,
+                trader_result=json.dumps({
+                    "action": decision.action if decision else None,
+                    "side": decision.side if decision and hasattr(decision, 'side') else None,
+                    "confidence": decision.confidence if decision else None,
+                    "limit_price": decision.limit_price if decision and hasattr(decision, 'limit_price') else None,
+                }) if decision else None,
+                trader_reasoning=trader_reasoning,
+            )
+            
+            await db_manager.record_prediction(prediction)
+            logger.info(f"Recorded prediction for market {market.market_id}")
+        except Exception as e:
+            logger.warning(f"Failed to record prediction: {e}")
+
         if decision.action == "BUY" and decision.confidence >= settings.trading.min_confidence_to_trade:
             price = market.yes_price if decision.side == "YES" else market.no_price
             

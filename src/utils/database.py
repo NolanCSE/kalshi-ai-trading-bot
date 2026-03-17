@@ -76,6 +76,43 @@ class LLMQuery:
     id: Optional[int] = None
 
 
+@dataclass
+class PredictionRecord:
+    """Records a prediction made by the trading system for later review."""
+    market_id: str
+    market_title: str
+    category: Optional[str] = None
+    rules: Optional[str] = None
+    created_at: Optional[datetime] = None
+    
+    # Predicted values
+    predicted_probability: Optional[float] = None
+    predicted_side: Optional[str] = None  # YES/NO
+    
+    # Agent results (stored as JSON strings)
+    knowledge_researcher_result: Optional[str] = None
+    bull_researcher_result: Optional[str] = None
+    bear_researcher_result: Optional[str] = None
+    trader_result: Optional[str] = None
+    
+    # Citations (stored as JSON string)
+    context_citations: Optional[str] = None
+    
+    # Reasoning
+    trader_reasoning: Optional[str] = None
+    
+    # Resolution
+    actual_result: Optional[str] = None  # YES/NO/UNKNOWN
+    resolved_at: Optional[datetime] = None
+    
+    # Trade info
+    trade_executed: bool = False
+    position_id: Optional[int] = None
+    pnl: Optional[float] = None
+    
+    id: Optional[int] = None
+
+
 class DatabaseManager(TradingLoggerMixin):
     """Manages database operations for the trading system."""
 
@@ -135,7 +172,42 @@ class DatabaseManager(TradingLoggerMixin):
                     )
                 """)
                 
-                            # Migration 4: Update existing positions with strategy based on rationale
+            # Migration 4: Add prediction_records table if it doesn't exist
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prediction_records'")
+            table_exists = await cursor.fetchone()
+            
+            if not table_exists:
+                self.logger.info("Creating prediction_records table")
+                await db.execute("""
+                    CREATE TABLE prediction_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        market_id TEXT NOT NULL,
+                        market_title TEXT NOT NULL,
+                        category TEXT,
+                        rules TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        
+                        predicted_probability REAL,
+                        predicted_side TEXT,
+                        
+                        knowledge_researcher_result TEXT,
+                        bull_researcher_result TEXT,
+                        bear_researcher_result TEXT,
+                        trader_result TEXT,
+                        
+                        context_citations TEXT,
+                        trader_reasoning TEXT,
+                        
+                        actual_result TEXT,
+                        resolved_at TEXT,
+                        
+                        trade_executed INTEGER DEFAULT 0,
+                        position_id INTEGER,
+                        pnl REAL
+                    )
+                """)
+                            
+            # Migration 5: Update existing positions with strategy based on rationale
             await self._migrate_existing_strategy_data(db)
             
         except Exception as e:
@@ -316,6 +388,31 @@ class DatabaseManager(TradingLoggerMixin):
                 action_items INTEGER DEFAULT 0,
                 report_file TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Add prediction_records table for tracking trading predictions
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id TEXT NOT NULL,
+                market_title TEXT NOT NULL,
+                category TEXT,
+                rules TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                predicted_probability REAL,
+                predicted_side TEXT,
+                knowledge_researcher_result TEXT,
+                bull_researcher_result TEXT,
+                bear_researcher_result TEXT,
+                trader_result TEXT,
+                context_citations TEXT,
+                trader_reasoning TEXT,
+                actual_result TEXT,
+                resolved_at TEXT,
+                trade_executed INTEGER DEFAULT 0,
+                position_id INTEGER,
+                pnl REAL
             )
         """)
 
@@ -567,6 +664,131 @@ class DatabaseManager(TradingLoggerMixin):
             """, trade_dict)
             await db.commit()
             self.logger.info(f"Added trade log for market {trade_log.market_id}.")
+
+    async def record_prediction(
+        self,
+        prediction: PredictionRecord
+    ) -> int:
+        """
+        Record a prediction for later review.
+        
+        Args:
+            prediction: The PredictionRecord to save.
+            
+        Returns:
+            The ID of the inserted record.
+        """
+        import json
+        
+        pred_dict = {
+            'market_id': prediction.market_id,
+            'market_title': prediction.market_title,
+            'category': prediction.category,
+            'rules': prediction.rules,
+            'created_at': (prediction.created_at or datetime.now()).isoformat(),
+            'predicted_probability': prediction.predicted_probability,
+            'predicted_side': prediction.predicted_side,
+            'knowledge_researcher_result': prediction.knowledge_researcher_result,
+            'bull_researcher_result': prediction.bull_researcher_result,
+            'bear_researcher_result': prediction.bear_researcher_result,
+            'trader_result': prediction.trader_result,
+            'context_citations': prediction.context_citations,
+            'trader_reasoning': prediction.trader_reasoning,
+            'actual_result': prediction.actual_result,
+            'resolved_at': prediction.resolved_at.isoformat() if prediction.resolved_at else None,
+            'trade_executed': 1 if prediction.trade_executed else 0,
+            'position_id': prediction.position_id,
+            'pnl': prediction.pnl,
+        }
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT INTO prediction_records (
+                    market_id, market_title, category, rules, created_at,
+                    predicted_probability, predicted_side,
+                    knowledge_researcher_result, bull_researcher_result, bear_researcher_result, trader_result,
+                    context_citations, trader_reasoning,
+                    actual_result, resolved_at,
+                    trade_executed, position_id, pnl
+                ) VALUES (
+                    :market_id, :market_title, :category, :rules, :created_at,
+                    :predicted_probability, :predicted_side,
+                    :knowledge_researcher_result, :bull_researcher_result, :bear_researcher_result, :trader_result,
+                    :context_citations, :trader_reasoning,
+                    :actual_result, :resolved_at,
+                    :trade_executed, :position_id, :pnl
+                )
+            """, pred_dict)
+            await db.commit()
+            record_id = cursor.lastrowid
+            self.logger.info(f"Recorded prediction for market {prediction.market_id}, record_id={record_id}")
+            return record_id
+
+    async def update_prediction_resolution(
+        self,
+        market_id: str,
+        actual_result: str,
+        pnl: float = None,
+        position_id: int = None
+    ) -> None:
+        """
+        Update a prediction record with actual result after market resolves.
+        
+        Args:
+            market_id: The market ID to update.
+            actual_result: The actual outcome (YES/NO/UNKNOWN).
+            pnl: The profit/loss from the trade (if executed).
+            position_id: The position ID (if trade was executed).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                UPDATE prediction_records
+                SET actual_result = :actual_result,
+                    resolved_at = :resolved_at,
+                    pnl = :pnl,
+                    position_id = :position_id
+                WHERE market_id = :market_id
+            """, {
+                'market_id': market_id,
+                'actual_result': actual_result,
+                'resolved_at': datetime.now().isoformat(),
+                'pnl': pnl,
+                'position_id': position_id
+            })
+            await db.commit()
+            self.logger.info(f"Updated prediction resolution for market {market_id}: {actual_result}")
+
+    async def get_prediction_record(self, market_id: str) -> PredictionRecord:
+        """Get a prediction record by market_id."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM prediction_records WHERE market_id = ?", (market_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return PredictionRecord(
+                        id=row['id'],
+                        market_id=row['market_id'],
+                        market_title=row['market_title'],
+                        category=row['category'],
+                        rules=row['rules'],
+                        created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
+                        predicted_probability=row['predicted_probability'],
+                        predicted_side=row['predicted_side'],
+                        knowledge_researcher_result=row['knowledge_researcher_result'],
+                        bull_researcher_result=row['bull_researcher_result'],
+                        bear_researcher_result=row['bear_researcher_result'],
+                        trader_result=row['trader_result'],
+                        context_citations=row['context_citations'],
+                        trader_reasoning=row['trader_reasoning'],
+                        actual_result=row['actual_result'],
+                        resolved_at=datetime.fromisoformat(row['resolved_at']) if row['resolved_at'] else None,
+                        trade_executed=bool(row['trade_executed']),
+                        position_id=row['position_id'],
+                        pnl=row['pnl'],
+                    )
+        return None
 
     async def get_performance_by_strategy(self) -> Dict[str, Dict]:
         """

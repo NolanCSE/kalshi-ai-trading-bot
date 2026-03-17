@@ -22,6 +22,7 @@ from src.agents.risk_manager_agent import RiskManagerAgent
 from src.agents.trader_agent import TraderAgent
 from src.agents.forecaster_agent import ForecasterAgent
 from src.agents.news_analyst_agent import NewsAnalystAgent
+from src.agents.knowledge_researcher import KnowledgeResearcher
 from src.utils.logging_setup import get_trading_logger
 
 logger = get_trading_logger("debate")
@@ -123,6 +124,19 @@ class DebateRunner:
                     pre_results["news_result"],
                 )
             )
+        
+        # Knowledge researcher runs in parallel and provides context to trader
+        if pre_results.get("knowledge_result"):
+            context["knowledge_result"] = pre_results["knowledge_result"]
+            step_results["knowledge_researcher"] = pre_results["knowledge_result"]
+            # Only add to transcript if worldview applies
+            if pre_results["knowledge_result"].get("worldview_applies"):
+                transcript_parts.append(
+                    self._format_step(
+                        "PRE-ANALYSIS: Knowledge Researcher",
+                        pre_results["knowledge_result"],
+                    )
+                )
 
         # ==================================================================
         # Step 1: Bull researcher presents YES case
@@ -232,6 +246,14 @@ class DebateRunner:
             tasks["news_result"] = asyncio.create_task(
                 self._run_agent_safe(
                     "news_analyst", market_data, context, get_completions["news_analyst"]
+                )
+            )
+        
+        # Knowledge researcher provides context but doesn't make predictions
+        if "knowledge_researcher" in self.agents and "knowledge_researcher" in get_completions:
+            tasks["knowledge_result"] = asyncio.create_task(
+                self._run_agent_safe(
+                    "knowledge_researcher", market_data, context, get_completions["knowledge_researcher"]
                 )
             )
 
@@ -363,6 +385,7 @@ class DebateRunner:
         return {
             "forecaster": ForecasterAgent(),
             "news_analyst": NewsAnalystAgent(),
+            "knowledge_researcher": KnowledgeResearcher(),
             "bull_researcher": BullResearcher(),
             "bear_researcher": BearResearcher(),
             "risk_manager": RiskManagerAgent(),

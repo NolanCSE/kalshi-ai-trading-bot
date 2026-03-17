@@ -58,7 +58,9 @@ dependencies = [
     "sentry-sdk==1.39.2",
     "xai_sdk>=1.0.0",
     "uvicorn",
+    "duckduckgo-search>=7.0.0",
     "json-repair",
+    "trafilatura>=1.6.0",
 ]
 
 [project.optional-dependencies]

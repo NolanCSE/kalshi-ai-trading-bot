@@ -1,0 +1,233 @@
+# Worldview Configuration for Ideology Agent
+# This file defines your ideological framework, beliefs, and domain expertise
+# The Ideology Agent uses this to generate predictions based on your worldview
+
+ideology_agent:
+  enabled: true
+  
+  # Model to use for ideology analysis
+  model: "anthropic/claude-sonnet-4.5"
+  provider: "openrouter"
+  
+  # Override trigger settings - when to pause for manual review
+  override_triggers:
+    min_divergence_from_ensemble: 0.20      # >20% probability difference
+    min_worldview_confidence: 0.70          # You have >70% confidence
+    min_divergence_from_market: 0.15        # Market differs by >15%
+    max_position_size_pct: 0.05             # Position >5% of portfolio
+  
+  # Confidence inference settings
+  confidence_inference:
+    enabled: true
+    high_confidence_phrases:
+      - "will certainly"
+      - "inevitably"
+      - "must"
+      - "definitely"
+      - "historically always"
+      - "structurally guaranteed"
+      - "cannot fail to"
+      - "is guaranteed"
+    medium_confidence_phrases:
+      - "likely"
+      - "probably"
+      - "expected to"
+      - "tends to"
+      - "typically"
+      - "in most cases"
+      - "generally"
+      - "usually"
+    low_confidence_phrases:
+      - "might"
+      - "could"
+      - "possibly"
+      - "may"
+      - "uncertain"
+      - "unclear"
+      - "remains to be seen"
+      - "hard to predict"
+
+# Your worldview dimensions - define your frameworks and beliefs
+worldview:
+  political:
+    framework: "hoppean_anarcho_capitalism"
+    confidence_in_framework: 0.9
+    key_beliefs:
+      - "Centralized states are inherently prone to corruption and inefficiency"
+      - "Free markets lead to better outcomes than government intervention"
+      - "Private property rights are the foundation of a prosperous society"
+      - "Keynesian policies create long-term economic distortions even if they provide short-term relief"
+      - "Monetarist policies also create distortions and may be less easy to detect than Keynesian ones"
+      - "Polities with stronger property right frameworks and less government intervention will tend to outperform others"
+      - "The state is ultimately a mafia that behaves in its own self-interest at the expense of its citizens"
+
+  foreign-policy:
+    framework: "realist"
+    confidence_in_framework: 0.9
+    key_beliefs:
+      - "International relations are fundamentally driven by power dynamics"
+      - "State actors represent to some degree public opinion of the polity they rule over"
+      - "Alliances are temporary and formed based on immediate strategic interests"
+      - "Great power competition is inevitable in the international system"
+      - "Multilateral institutions are useful tools but ultimately constrained by member states' interests"
+      - "Regional powers can influence global affairs through strategic positioning"
+      - "Geopolitical conflicts are often driven by resource competition and other material constraints as opposed to ideology"
+      - "Ideological rulers tend to be short-lived and are replaced with more 'practical' rulers"
+      - "States with schizophrenic foreign policies that seem to be against the usual principles tend to suggest either internal political instability or hostile takeover by another group"
+    
+  economic:
+    framework: "austrian_full-reserve_capitalism_with_bitcoin_maximalist_characteristics"
+    confidence_in_framework: 0.70
+    key_beliefs:
+      - "Fractional reserve banking creates artificial booms and inevitable busts"
+      - "Bitcoin's fixed supply makes it superior to fiat currency as a store of value"
+      - "Government intervention in markets leads to misallocation of resources and long-term harm"
+      - "Governments have an interest in central banking"
+      - "The Fed's balance sheet expansion is unsustainable and will lead to hyperinflation"
+      - "Monetary policy is a zero-sum game where the Fed wins and the public loses"
+      - "Cryptocurrency, with the exception of Bitcoin, is a scam waiting to collapse"
+    
+  # technology:
+  #   framework: "exponential_growth_realist"
+  #   confidence_in_framework: 0.80
+  #   key_beliefs:
+  #     - "LLM capabilities are consistently underestimated by mainstream analysts"
+  #     - "AI safety regulation will lag capability development by 5-10 years"
+  #     - "Technological change follows exponential, not linear, patterns"
+    
+  # Domain expertise areas
+# domain_expertise:
+#   - area: "artificial_intelligence"
+#     expertise_level: "expert"  # beginner, knowledgeable, expert
+#     years_experience: 10
+#     specific_insights:
+#       - "Training scaling laws have held consistently across model generations"
+#       - "Regulatory capture in AI is structurally difficult due to rapid change"
+#       - "Open source models follow predictable capability curves"
+      
+#   - area: "monetary_policy"
+#     expertise_level: "knowledgeable"
+#     years_experience: 5
+#     specific_insights:
+#       - "Fed predictions consistently miss turning points by 6-12 months"
+#       - "Quantitative tightening has non-linear effects on asset prices"
+
+# Knowledge library configuration
+knowledge_library:
+  enabled: true
+  library_path: "library/"  # Path to your document library
+  
+  # Document categories
+  categories:
+    - name: "economic_theory"
+      description: "Books and papers on economics"
+      relevance_domains: ["economics", "monetary_policy", "markets"]
+      
+    - name: "tech_prediction"
+      description: "Works on technology trends and forecasting"
+      relevance_domains: ["technology", "AI", "innovation"]
+      
+    - name: "political_theory"
+      description: "Political science and policy analysis"
+      relevance_domains: ["politics", "policy", "regulation"]
+      
+    - name: "risk_theory"
+      description: "Works on uncertainty, risk, and probability"
+      relevance_domains: ["risk", "finance", "probability"]
+      
+    - name: "personal_notes"
+      description: "Your own notes and frameworks"
+      relevance_domains: ["all"]  # Applies to all domains
+  
+  # RAG settings
+  rag_settings:
+    chunk_size: 512
+    chunk_overlap: 128
+    top_k_retrieval: 5
+    embedding_model: "text-embedding-3-small"  # OpenAI embedding model
+    similarity_threshold: 0.5
+    
+  # Supported document formats
+  supported_formats:
+    - ".pdf"
+    - ".md"
+    - ".txt"
+
+# Web research configuration - search and ingest articles from specified websites
+web_research:
+  enabled: true  # Set to false to disable web research
+  
+  # Target domains to search for articles
+  # The agent will search "site:domain.com query" for relevant articles
+  target_domains:
+    - "mises.org"
+    - "unz.com"
+    - "antiwar.com"
+    - "airwars.org"
+  
+  # Search settings
+  search:
+    max_results_per_query: 5  # Number of articles to fetch per search
+    timeout_seconds: 30       # Timeout for each web request
+    
+  # Article ingestion settings
+  ingestion:
+    auto_ingest: true        # Automatically ingest found articles into knowledge library
+    max_articles_per_market: 10  # Max new articles to ingest per market analysis
+    skip_existing: true      # Skip articles already in database (deduplication)
+  
+  # Categories for web articles
+  categories:
+    - name: "web_articles"
+      description: "Articles fetched from the web"
+      relevance_domains: ["general", "news", "analysis"]
+
+# Applicable market categories
+# The ideology agent only applies to markets in these categories
+applicable_categories:
+  - "politics"
+  - "economics"
+  - "technology"
+  - "climate"
+  - "regulation"
+  - "policy"
+
+# Excluded categories - ideology agent skips these
+excluded_markets:
+  - "sports"
+  - "weather"
+  - "entertainment"
+  - "celebrities"
+  - "pure_chance"
+
+# News integration settings
+news_integration:
+  enabled: true
+  use_existing_rss: true
+  max_news_articles: 10
+  news_age_hours: 48  # Only use news from last 48 hours
+  
+  # Interpretation settings
+  interpretation:
+    filter_through_worldview: true
+    identify_confirming_challenges: true
+    flag_blind_spots: true
+
+# Calibration tracking
+calibration_tracking:
+  enabled: true
+  min_predictions_before_weight_adjustment: 20
+  brier_score_threshold: 0.25  # Target Brier score
+  
+  # Dynamic weight adjustment (optional)
+  dynamic_weighting:
+    enabled: false  # Set to true to auto-adjust weight based on calibration
+    min_weight: 0.05
+    max_weight: 0.30
+    
+# Logging and review
+logging:
+  log_all_predictions: true
+  log_retrieved_passages: true
+  log_news_interpretation: true
+  store_divergence_alerts: true

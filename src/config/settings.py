@@ -22,6 +22,9 @@ class APIConfig:
     openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     openai_base_url: str = "https://api.openai.com/v1"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    supabase_url: str = field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
+    supabase_anon_key: str = field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
+    encryption_key: str = field(default_factory=lambda: os.getenv("ENCRYPTION_KEY", ""))
 
 
 @dataclass
@@ -30,11 +33,14 @@ class EnsembleConfig:
     enabled: bool = True
     # Model roster for ensemble decisions
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "grok-4-1-fast-reasoning": {"provider": "xai", "role": "forecaster", "weight": 0.30},
+        "x-ai/grok-4-1-fast-reasoning": {"provider": "openrouter", "role": "forecaster", "weight": 0.25},
         "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "news_analyst", "weight": 0.20},
         "openai/o3": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.20},
         "google/gemini-3-pro-preview": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.15},
         "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "risk_manager", "weight": 0.15},
+        # Knowledge researcher uses Mistral via OpenRouter for low-censorship retrieval
+        # Note: NOT part of weighted ensemble - provides context to trader only
+        "mistralai/mistral-7b-instruct": {"provider": "openrouter", "role": "knowledge_researcher", "weight": 0.0},
     })
     min_models_for_consensus: int = 3
     disagreement_threshold: float = 0.25  # Std dev above this = low confidence
@@ -42,6 +48,8 @@ class EnsembleConfig:
     debate_enabled: bool = True
     calibration_tracking: bool = True
     max_ensemble_cost: float = 0.50  # Max cost per ensemble decision
+    # Ideology agent settings
+    ideology_agent_override: bool = True  # Allow ideology agent to trigger manual review
 
 
 @dataclass
@@ -79,8 +87,8 @@ class TradingConfig:
     scan_interval_seconds: int = 30      # DECREASED: Scan more frequently (was 60, now 30)
     
     # AI model configuration
-    primary_model: str = "grok-4-1-fast-reasoning"  # Latest xAI frontier reasoning model
-    fallback_model: str = "grok-4-1-fast-non-reasoning"  # Fallback to non-reasoning variant
+    primary_model: str = "x-ai/grok-4-1-fast-reasoning"  # Grok via OpenRouter
+    fallback_model: str = "x-ai/grok-4-1-fast-non-reasoning"  # Fallback via OpenRouter
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     
