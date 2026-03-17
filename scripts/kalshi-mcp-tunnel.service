@@ -52,7 +52,7 @@ Environment=ZONE=us-central1-a
 User=Nolan
 WorkingDirectory=/home/Nolan/projects/kalshi-ai-trading-bot
 
-ExecStart=/home/Nolan/projects/kalshi-ai-trading-bot/scripts/tunnel_mcp.sh \
+ExecStart=/bin/bash /home/Nolan/projects/kalshi-ai-trading-bot/scripts/tunnel_mcp.sh \
     ${GCP_PROJECT} \
     ${VM_INSTANCE} \
     ${ZONE}
