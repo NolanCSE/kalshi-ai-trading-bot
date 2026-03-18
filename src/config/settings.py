@@ -57,10 +57,15 @@ class SentimentConfig:
     """News and sentiment analysis configuration."""
     enabled: bool = True
     rss_feeds: List[str] = field(default_factory=lambda: [
-        "https://feeds.reuters.com/reuters/topNews",
-        "https://feeds.reuters.com/reuters/businessNews",
+        # Reuters killed their public RSS in 2020 — use AP and other free feeds
+        "https://feeds.feedburner.com/businessinsider",
+        "https://www.ft.com/rss/home",
+        "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # CNBC top news
+        "https://www.cnbc.com/id/10000664/device/rss/rss.html",   # CNBC economy
         "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
         "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://www.politico.com/rss/politics08.xml",
+        "https://thehill.com/feed/",
     ])
     sentiment_model: str = "google/gemini-3-flash-preview"  # Fast/cheap for sentiment
     cache_ttl_minutes: int = 30

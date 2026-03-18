@@ -493,7 +493,7 @@ Generate the queries:"""
             
             # Get relevant news for this market
             query = market_data.get("title", "")
-            news_items_with_scores = aggregator.get_relevant_articles(query, max_results=5)
+            news_items_with_scores = aggregator.get_relevant_articles(query, max_articles=5)
             news_items = [item for item, score in news_items_with_scores]
             
             if not news_items:
