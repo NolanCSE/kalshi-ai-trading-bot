@@ -45,8 +45,12 @@ CAPABILITY_MAP: Dict[str, List[Tuple[str, str]]] = {
         ("x-ai/grok-4-1-fast-reasoning", "openrouter"),
     ],
     "retrieval": [
-        # Low-censorship models for knowledge retrieval without moral filtering
-        ("mistralai/mistral-7b-instruct", "openrouter"),
+        # Lightweight Mistral for knowledge retrieval / RAG summarisation.
+        # mistral-7b-instruct was delisted from OpenRouter; Nemo is the
+        # current cheapest available Mistral model ($0.02/1M tokens).
+        # Gemma 3 12B free is a confirmed fallback.
+        ("mistralai/mistral-nemo", "openrouter"),
+        ("google/gemma-3-12b-it:free", "openrouter"),
     ],
 }
 
@@ -57,7 +61,7 @@ FULL_FLEET: List[Tuple[str, str]] = [
     ("openai/o3", "openrouter"),
     ("google/gemini-3-pro-preview", "openrouter"),
     ("deepseek/deepseek-v3.2", "openrouter"),
-    ("mistralai/mistral-7b-instruct", "openrouter"),  # Low-censorship retrieval
+    ("mistralai/mistral-nemo", "openrouter"),          # Lightweight retrieval / RAG
 ]
 
 

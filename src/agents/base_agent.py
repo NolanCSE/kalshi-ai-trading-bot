@@ -110,8 +110,14 @@ class BaseAgent(ABC):
 
             raw_response = await get_completion(prompt)
 
-            if raw_response is None:
-                return self._error_result("Model returned None (API limit or failure)")
+            if not raw_response:
+                # Catches both None (daily limit / API failure) and "" (model
+                # returned an empty string, e.g. a 404 swallowed by the client)
+                return self._error_result(
+                    f"Model returned empty response (None or empty string). "
+                    f"Possible causes: daily API limit reached, model unavailable "
+                    f"on OpenRouter, or network error."
+                )
 
             elapsed = time.time() - start_time
             self.logger.info(
