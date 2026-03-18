@@ -1,5 +1,8 @@
 # Core HTTP and async libraries
-httpx>=0.27.0
+# httpx must be pinned to <0.28 — newer versions removed the `proxies` kwarg
+# that the openai SDK passes to AsyncHttpxClientWrapper, causing all completions
+# to fail with "unexpected keyword argument 'proxies'".
+httpx>=0.27.0,<0.28.0
 aiohttp==3.9.1
 requests==2.31.0
 
