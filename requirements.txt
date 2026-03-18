@@ -1,8 +1,5 @@
 # Core HTTP and async libraries
-# httpx must be pinned to <0.28 — newer versions removed the `proxies` kwarg
-# that the openai SDK passes to AsyncHttpxClientWrapper, causing all completions
-# to fail with "unexpected keyword argument 'proxies'".
-httpx>=0.27.0,<0.28.0
+httpx>=0.28.1
 aiohttp==3.9.1
 requests==2.31.0
 
@@ -15,8 +12,11 @@ cryptography==42.0.0
 pycryptodome==3.20.0
 
 # OpenRouter/OpenAI client
-openai==1.51.2
-anthropic
+# openai>=1.57.0 required — earlier 1.x versions pass a `proxies` kwarg to
+# httpx.AsyncClient which was removed in httpx 0.28 (needed by fastmcp>=3.1.0).
+openai>=1.57.0
+# anthropic>=0.40.0 for the same reason
+anthropic>=0.40.0
 
 # Data handling and analysis - updated for Python 3.13 compatibility
 pandas>=2.0.0
