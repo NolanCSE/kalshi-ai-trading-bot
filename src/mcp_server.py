@@ -141,24 +141,92 @@ def _make_completions(market_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Sports/entertainment series prefixes to always exclude.
+# Kalshi's unfiltered market list leads with these; we never want them.
+# ---------------------------------------------------------------------------
+_SPORTS_PREFIXES = (
+    "KXMVE",   # NBA player props (MVE = multi-variate events)
+    "KXNBA",   # NBA game markets
+    "KXNFL",   # NFL
+    "KXNHL",   # NHL
+    "KXMLB",   # MLB
+    "KXNCAA",  # College sports
+    "KXSOCCER","KXMLS",
+    "KXTENNIS","KXWTA","KXATP",
+    "KXGOLF",  "KXPGA",
+    "KXNASCAR","KXF1",
+    "KXBOXING","KXMMA","KXUFC",
+    "KXOLYMPIC",
+    "KXENTERTAIN",
+    "KXAWARDS","KXOSCARS","KXEMMYS","KXGRAMMYS",
+    "KXREALITY",
+)
+
+# Macro / policy series to scan when no specific series is requested.
+# Ordered roughly by typical interest level.
+_MACRO_SERIES = [
+    "KXFED",     # Federal funds rate / FOMC decisions
+    "KXCPI",     # Consumer Price Index
+    "KXGDP",     # GDP growth
+    "KXUNRATE",  # Unemployment rate
+    "KXPCE",     # PCE inflation
+    "KXPPI",     # Producer Price Index
+    "KXNFP",     # Non-Farm Payrolls
+    "KXSPX",     # S&P 500
+    "KXNASDAQ",  # Nasdaq
+    "KXBTC",     # Bitcoin
+    "KXETH",     # Ethereum
+    "KXGOLD",    # Gold price
+    "KXOIL",     # Oil price
+    "KXUSD",     # Dollar index
+    "KXTRUMP",   # Trump policy / executive actions
+    "KXTARIFF",  # Tariff policy
+    "KXDEBT",    # US debt ceiling
+    "KXRECESSION",
+    "KXIRAN",    # Geopolitical
+    "KXUKRAINE",
+    "KXCHINA",
+    "KXNATO",
+    "KXAI",      # AI policy / regulation
+    "KXELON",    # Elon Musk / DOGE
+]
+
+
+def _is_sports(ticker: str) -> bool:
+    """Return True if the ticker belongs to a sports/entertainment series."""
+    t = ticker.upper()
+    return any(t.startswith(p) for p in _SPORTS_PREFIXES)
+
+
+# ---------------------------------------------------------------------------
 # Tool 1 — list_markets
 # ---------------------------------------------------------------------------
 @mcp.tool
 async def list_markets(
     series: str = "",
+    category: str = "macro",
     min_volume: int = 1000,
     limit: int = 25,
 ) -> dict:
     """
     Discover live, priced Kalshi prediction markets.
 
+    Sports and entertainment markets are always excluded.  By default only
+    macro / policy markets are returned (economics, Fed, crypto, geopolitics).
+
     Args:
-        series: Optional Kalshi series ticker prefix to filter by
-                (e.g. "KXCPI", "KXFED", "KXGDP").  Leave empty to
-                browse all non-sports active markets.
-        min_volume: Only return markets with at least this many contracts
-                    traded.  Default 1 000.
-        limit: Maximum number of markets to return.  Default 25, max 100.
+        series: Optional specific Kalshi series ticker to filter by
+                (e.g. "KXCPI", "KXFED", "KXGDP").  When provided, only
+                markets from that series are returned and the category
+                filter is ignored.
+        category: Broad category filter when no series is specified.
+                  "macro"  — economics, Fed, inflation, GDP, jobs (default)
+                  "crypto" — Bitcoin, Ethereum, crypto prices
+                  "geo"    — geopolitics, foreign policy, war/conflict
+                  "policy" — US politics, tariffs, regulation, executive actions
+                  "all"    — everything non-sports
+        min_volume: Minimum number of contracts traded.  Default 1 000.
+        limit: Maximum markets to return.  Default 25, max 100.
 
     Returns:
         {
@@ -166,12 +234,12 @@ async def list_markets(
             {
               "ticker": str,
               "title": str,
-              "yes_mid": float,   # midpoint of bid/ask in dollars (0-1)
+              "yes_mid": float,
               "yes_ask": float,
               "yes_bid": float,
               "volume": int,
               "open_interest": int,
-              "close_date": str,  # YYYY-MM-DD
+              "close_date": str,
               "rules": str,
             }, ...
           ],
@@ -182,26 +250,50 @@ async def list_markets(
     assert _kalshi is not None, "Kalshi client not initialised"
     limit = min(int(limit), 100)
 
-    params: dict[str, Any] = {"limit": min(limit * 4, 200)}  # over-fetch then filter
-    if series:
-        params["series_ticker"] = series
+    # Map category → which macro series to scan
+    _CATEGORY_SERIES: dict[str, list[str]] = {
+        "macro":  ["KXFED","KXCPI","KXGDP","KXUNRATE","KXPCE","KXPPI","KXNFP",
+                   "KXSPX","KXNASDAQ","KXGOLD","KXOIL","KXUSD","KXRECESSION"],
+        "crypto": ["KXBTC","KXETH"],
+        "geo":    ["KXIRAN","KXUKRAINE","KXCHINA","KXNATO"],
+        "policy": ["KXTRUMP","KXTARIFF","KXDEBT","KXELON","KXAI"],
+        "all":    _MACRO_SERIES,
+    }
 
-    resp = await _kalshi.get_markets(**params)
-    raw = resp.get("markets", [])
+    raw_markets: list[dict] = []
+
+    if series:
+        # Specific series requested — single fetch, no category logic
+        resp = await _kalshi.get_markets(limit=min(limit * 4, 200),
+                                         series_ticker=series.upper())
+        raw_markets = resp.get("markets", [])
+    else:
+        # Scan across the relevant series list, collecting until we have enough
+        series_to_scan = _CATEGORY_SERIES.get(category.lower(), _CATEGORY_SERIES["macro"])
+        for s in series_to_scan:
+            if len(raw_markets) >= limit * 6:
+                break
+            try:
+                resp = await _kalshi.get_markets(limit=50, series_ticker=s)
+                raw_markets.extend(resp.get("markets", []))
+            except Exception:
+                continue
 
     results = []
-    for m in raw:
-        ya = float(m.get("yes_ask_dollars") or 0)
-        yb = float(m.get("yes_bid_dollars") or 0)
-        vol = float(m.get("volume_fp") or 0)
-        status = m.get("status", "")
+    for m in raw_markets:
+        ticker = m.get("ticker", "")
+        if _is_sports(ticker):
+            continue
 
-        # Filter: active, priced on both sides, meets volume floor
-        if status != "active" or ya <= 0.01 or ya >= 0.99 or vol < min_volume:
+        ya  = float(m.get("yes_ask_dollars") or 0)
+        yb  = float(m.get("yes_bid_dollars") or 0)
+        vol = float(m.get("volume_fp") or 0)
+
+        if m.get("status") != "active" or ya <= 0.01 or ya >= 0.99 or vol < min_volume:
             continue
 
         results.append({
-            "ticker":        m.get("ticker", ""),
+            "ticker":        ticker,
             "title":         m.get("title", ""),
             "yes_mid":       round((ya + yb) / 2, 3),
             "yes_ask":       round(ya, 3),
@@ -215,11 +307,16 @@ async def list_markets(
         if len(results) >= limit:
             break
 
+    # Sort by volume descending so the most liquid markets appear first
+    results.sort(key=lambda x: x["volume"], reverse=True)
+
     return {
         "markets": results,
         "count":   len(results),
         "note": (
+            "Sports and entertainment markets are always excluded. "
             "Prices in dollars (0-1 scale). yes_mid is the bid/ask midpoint. "
+            "category options: macro (default), crypto, geo, policy, all. "
             "Use get_market_ladder for a full strike ladder, or analyze_market "
             "to run the full debate on a specific ticker."
         ),
