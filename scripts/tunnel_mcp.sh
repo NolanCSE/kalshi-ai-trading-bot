@@ -105,6 +105,15 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # ── Start the MCP server locally ──────────────────────────────────────────────
 start_mcp() {
+    # Clear any stale process already holding the port before starting a new one
+    local stale
+    stale=$(ss -tlnp 2>/dev/null | grep ":$MCP_PORT " | grep -oP 'pid=\K[0-9]+' | head -1)
+    if [[ -n "$stale" ]]; then
+        warn "Port $MCP_PORT already in use by pid=$stale — killing stale process..."
+        kill -9 "$stale" 2>/dev/null || true
+        sleep 2
+    fi
+
     info "Starting MCP server on localhost:$MCP_PORT..."
     cd "$PROJECT_DIR"
     source "$VENV/bin/activate"
