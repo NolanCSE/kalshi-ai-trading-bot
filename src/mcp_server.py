@@ -37,6 +37,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -82,6 +84,22 @@ ROLE_MODEL_MAP: dict[str, str] = {
 _kalshi: KalshiClient | None = None
 _router: ModelRouter | None = None
 
+# ---------------------------------------------------------------------------
+# In-memory job store for async debate tracking
+# ---------------------------------------------------------------------------
+# job_id -> {
+#   "status":   "queued" | "running" | "complete" | "error"
+#   "ticker":   str
+#   "started":  float (epoch)
+#   "elapsed":  float | None
+#   "step":     str   (current debate step)
+#   "steps_done": list[str]
+#   "result":   dict | None
+#   "error":    str | None
+# }
+_jobs: dict[str, dict[str, Any]] = {}
+_JOB_TTL_SECONDS = 3600  # prune completed jobs after 1 hour
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
@@ -115,6 +133,20 @@ mcp = FastMCP(
         "examine in depth.  analyze_market is expensive — call it deliberately."
     ),
     lifespan=lifespan,
+)
+
+# Update server instructions to reflect async workflow
+mcp.instructions = (
+    "You have access to a Kalshi prediction-market analysis system backed "
+    "by a 7-agent AI debate pipeline.\n\n"
+    "WORKFLOW:\n"
+    "1. Use list_markets(category=...) to discover live markets.\n"
+    "2. Use get_market_ladder(event_ticker) to see the full probability ladder for an event.\n"
+    "3. Call analyze_market(ticker) to START the debate — it returns immediately with a job_id.\n"
+    "4. Call get_analysis_status(job_id) every ~60 seconds to check progress.\n"
+    "   When status=='complete' the full result is in the response.\n\n"
+    "DO NOT wait silently after analyze_market — poll with get_analysis_status "
+    "and report progress to the user every minute."
 )
 
 
@@ -475,126 +507,15 @@ async def get_market_ladder(event_ticker: str) -> dict:
 # ---------------------------------------------------------------------------
 # Tool 3 — analyze_market
 # ---------------------------------------------------------------------------
-@mcp.tool
-async def analyze_market(
-    ticker: str,
-    paper_trade: bool = False,
-) -> dict:
-    """
-    Run the full 7-agent AI debate on a specific Kalshi market.
-
-    Agents (run in structured sequence):
-      1. ForecasterAgent    — base-rate + current conditions probability
-      2. NewsAnalystAgent   — sentiment and news impact direction
-      3. KnowledgeResearcher — RAG retrieval from document library,
-                               DuckDuckGo web search, and worldview injection
-      4. BullResearcher     — strongest case for YES
-      5. BearResearcher     — strongest case for NO
-      6. RiskManagerAgent   — EV calculation and position sizing
-      7. TraderAgent        — final synthesis through the worldview lens
-
-    This call is EXPENSIVE in time (~3-5 minutes) and LLM cost (~$0.05-0.15).
-    Call it deliberately on markets you have genuine interest in.
-
-    Args:
-        ticker:      Kalshi market ticker (e.g. "KXCPI-26MAR-T0.7").
-                     Use list_markets or get_market_ladder to find tickers.
-        paper_trade: If True, log the result as a paper trade in the local
-                     database.  Default False (analysis only).
-
-    Returns:
-        {
-          "market": { ticker, title, yes_price, no_price, volume, days_to_expiry },
-          "decision": {
-            "action":           "BUY" | "SELL" | "SKIP",
-            "side":             "YES" | "NO",
-            "limit_price_cents": int,
-            "confidence":       float,
-            "position_size_pct": float,
-            "ev_per_contract":  float,   # expected value in dollars per $1 contract
-          },
-          "agents": {
-            "forecaster":    { probability, confidence, base_rate, reasoning },
-            "news_analyst":  { sentiment, relevance, impact_direction, reasoning },
-            "knowledge_researcher": { worldview_applies, key_frameworks, reasoning },
-            "bull_researcher": { probability, probability_floor, confidence, key_arguments, reasoning },
-            "bear_researcher": { probability, probability_ceiling, confidence, key_arguments, reasoning },
-            "risk_manager":  { ev_estimate, risk_score, should_trade, recommended_size_pct, reasoning },
-            "trader":        { action, side, limit_price, confidence, reasoning },
-          },
-          "trader_reasoning": str,   # Full trader reasoning (pre-transcript)
-          "elapsed_seconds":  float,
-          "error":            str | None,
-        }
-    """
-    assert _kalshi is not None, "Kalshi client not initialised"
-    assert _router is not None,  "Model router not initialised"
-
-    # ── 1. Fetch live market data from Kalshi ────────────────────────────
-    try:
-        resp = await _kalshi.get_market(ticker)
-        raw = resp.get("market", {})
-    except Exception as exc:
-        return {"error": f"Failed to fetch market {ticker!r}: {exc}"}
-
-    if not raw:
-        return {"error": f"Market {ticker!r} not found on Kalshi."}
-
-    ya  = float(raw.get("yes_ask_dollars") or 0)
-    yb  = float(raw.get("yes_bid_dollars") or 0)
-    na  = float(raw.get("no_ask_dollars")  or 0)
-    nb  = float(raw.get("no_bid_dollars")  or 0)
-    vol = float(raw.get("volume_fp")       or 0)
-    oi  = float(raw.get("open_interest_fp") or 0)
-
-    close_time = raw.get("close_time") or raw.get("expiration_time") or ""
-    days_to_expiry: float = 30.0
-    if close_time:
-        from datetime import datetime, timezone
-        try:
-            expiry_dt = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
-            now_dt    = datetime.now(timezone.utc)
-            days_to_expiry = max(0.0, (expiry_dt - now_dt).total_seconds() / 86400)
-        except ValueError:
-            pass
-
-    market_data = {
-        "ticker":         raw.get("ticker", ticker),
-        "title":          raw.get("title", ""),
-        "rules":          (raw.get("rules_primary") or "") + " " + (raw.get("rules_secondary") or ""),
-        "yes_price":      round((ya + yb) / 2, 3),
-        "no_price":       round((na + nb) / 2, 3),
-        "volume":         int(vol),
-        "open_interest":  int(oi),
-        "category":       "economics",   # default; Kalshi v2 doesn't return category
-        "days_to_expiry": round(days_to_expiry, 1),
-        "expiration_ts":  0,
-    }
-
-    # ── 2. Run the debate ────────────────────────────────────────────────
-    completions = _make_completions(ticker)
-    runner = DebateRunner()
-
-    try:
-        result = await runner.run_debate(
-            market_data=market_data,
-            get_completions=completions,
-            context={"portfolio": {"cash": 1000.0}},
-        )
-    except Exception as exc:
-        return {
-            "market": market_data,
-            "error":  f"Debate pipeline failed: {exc}",
-        }
-
-    # ── 3. Compute EV for the recommended trade ──────────────────────────
-    action = result.get("action", "SKIP")
-    side   = result.get("side", "YES")
+def _build_final_response(market_data: dict, result: dict) -> dict:
+    """Shape the debate result dict into the standard tool response format."""
+    action      = result.get("action", "SKIP")
+    side        = result.get("side", "YES")
     limit_cents = result.get("limit_price", 50)
-
-    ev_per_contract: float = 0.0
     step_results = result.get("step_results", {})
 
+    # Confidence-weighted EV
+    ev_per_contract: float = 0.0
     probs = []
     for role in ("forecaster", "bull_researcher", "bear_researcher"):
         sr = step_results.get(role) or {}
@@ -605,13 +526,11 @@ async def analyze_market(
                 probs.append((float(p), float(c)))
             except (TypeError, ValueError):
                 pass
-
     if probs:
-        tw = sum(w for _, w in probs)
+        tw     = sum(w for _, w in probs)
         cw_yes = sum(p * w for p, w in probs) / tw if tw > 0 else 0.5
         cw_no  = 1.0 - cw_yes
         entry  = limit_cents / 100.0
-
         if action != "SKIP":
             if action == "BUY" and side == "YES":
                 ev_per_contract = cw_yes * (1.0 - entry) - cw_no * entry
@@ -619,50 +538,18 @@ async def analyze_market(
                 ev_per_contract = cw_no * (1.0 - entry) - cw_yes * entry
             elif action == "SELL" and side == "YES":
                 ev_per_contract = cw_no * entry - cw_yes * (1.0 - entry)
-            else:  # SELL NO
+            else:
                 ev_per_contract = cw_yes * entry - cw_no * (1.0 - entry)
 
-    # ── 4. Shape the response ─────────────────────────────────────────────
     def _agent_summary(role: str, fields: list[str]) -> dict:
         sr = step_results.get(role) or {}
         if "error" in sr:
             return {"error": sr["error"]}
-        out = {}
-        for f in fields:
-            v = sr.get(f)
-            if v is not None:
-                out[f] = v
-        # Truncate reasoning so it's readable but not overwhelming
+        out = {f: sr[f] for f in fields if sr.get(f) is not None}
         rsn = sr.get("reasoning", "")
         out["reasoning"] = rsn[:800] if rsn else ""
         return out
 
-    agents_summary = {
-        "forecaster": _agent_summary("forecaster", [
-            "probability", "confidence", "base_rate", "side"
-        ]),
-        "news_analyst": _agent_summary("news_analyst", [
-            "sentiment", "relevance", "impact_direction", "key_factors"
-        ]),
-        "knowledge_researcher": _agent_summary("knowledge_researcher", [
-            "worldview_applies", "key_frameworks", "knowledge_citations"
-        ]),
-        "bull_researcher": _agent_summary("bull_researcher", [
-            "probability", "probability_floor", "confidence", "key_arguments", "catalysts"
-        ]),
-        "bear_researcher": _agent_summary("bear_researcher", [
-            "probability", "probability_ceiling", "confidence", "key_arguments", "risk_factors"
-        ]),
-        "risk_manager": _agent_summary("risk_manager", [
-            "ev_estimate", "risk_score", "should_trade",
-            "recommended_size_pct", "max_loss_pct", "edge_durability_hours"
-        ]),
-        "trader": _agent_summary("trader", [
-            "action", "side", "limit_price", "confidence", "position_size_pct"
-        ]),
-    }
-
-    # Full trader reasoning, trimmed before the raw transcript block
     full_reasoning = result.get("reasoning", "")
     cut = full_reasoning.find("--- DEBATE TRANSCRIPT ---")
     trader_reasoning = full_reasoning[:cut].strip() if cut > 0 else full_reasoning[:3000]
@@ -685,10 +572,290 @@ async def analyze_market(
             "position_size_pct": result.get("position_size_pct", 0.0),
             "ev_per_contract":   round(ev_per_contract, 4),
         },
-        "agents":          agents_summary,
+        "agents": {
+            "forecaster":           _agent_summary("forecaster",        ["probability","confidence","base_rate","side"]),
+            "news_analyst":         _agent_summary("news_analyst",       ["sentiment","relevance","impact_direction","key_factors"]),
+            "knowledge_researcher": _agent_summary("knowledge_researcher",["worldview_applies","key_frameworks","knowledge_citations"]),
+            "bull_researcher":      _agent_summary("bull_researcher",    ["probability","probability_floor","confidence","key_arguments","catalysts"]),
+            "bear_researcher":      _agent_summary("bear_researcher",    ["probability","probability_ceiling","confidence","key_arguments","risk_factors"]),
+            "risk_manager":         _agent_summary("risk_manager",       ["ev_estimate","risk_score","should_trade","recommended_size_pct","max_loss_pct","edge_durability_hours"]),
+            "trader":               _agent_summary("trader",             ["action","side","limit_price","confidence","position_size_pct"]),
+        },
         "trader_reasoning": trader_reasoning,
         "elapsed_seconds":  result.get("elapsed_seconds", 0.0),
         "error":            result.get("error"),
+    }
+
+
+async def _fetch_market_data(ticker: str) -> tuple[dict | None, str | None]:
+    """Fetch and normalise Kalshi market data. Returns (market_data, error_str)."""
+    assert _kalshi is not None
+    try:
+        resp = await _kalshi.get_market(ticker)
+        raw  = resp.get("market", {})
+    except Exception as exc:
+        return None, f"Failed to fetch market {ticker!r}: {exc}"
+    if not raw:
+        return None, f"Market {ticker!r} not found on Kalshi."
+
+    ya  = float(raw.get("yes_ask_dollars") or 0)
+    yb  = float(raw.get("yes_bid_dollars") or 0)
+    na  = float(raw.get("no_ask_dollars")  or 0)
+    nb  = float(raw.get("no_bid_dollars")  or 0)
+    vol = float(raw.get("volume_fp")       or 0)
+    oi  = float(raw.get("open_interest_fp") or 0)
+
+    close_time     = raw.get("close_time") or raw.get("expiration_time") or ""
+    days_to_expiry = 30.0
+    if close_time:
+        from datetime import datetime, timezone
+        try:
+            expiry_dt      = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
+            days_to_expiry = max(0.0, (expiry_dt - datetime.now(timezone.utc)).total_seconds() / 86400)
+        except ValueError:
+            pass
+
+    return {
+        "ticker":         raw.get("ticker", ticker),
+        "title":          raw.get("title", ""),
+        "rules":          (raw.get("rules_primary") or "") + " " + (raw.get("rules_secondary") or ""),
+        "yes_price":      round((ya + yb) / 2, 3),
+        "no_price":       round((na + nb) / 2, 3),
+        "volume":         int(vol),
+        "open_interest":  int(oi),
+        "category":       "economics",
+        "days_to_expiry": round(days_to_expiry, 1),
+        "expiration_ts":  0,
+    }, None
+
+
+async def _run_debate_job(job_id: str, market_data: dict) -> None:
+    """Background coroutine: run the full debate and write results to _jobs."""
+    job = _jobs[job_id]
+    ticker = market_data["ticker"]
+
+    # Ordered debate steps — mirrors DebateRunner's internal sequence
+    STEPS = [
+        "knowledge_researcher",
+        "forecaster",
+        "news_analyst",
+        "bull_researcher",
+        "bear_researcher",
+        "risk_manager",
+        "trader",
+    ]
+
+    # Patch DebateRunner to report progress into the job store.
+    # We wrap each completion callable so we can detect which step just started.
+    completions = _make_completions(ticker)
+    wrapped: dict[str, Any] = {}
+    for role, fn in completions.items():
+        async def _w(prompt: str, _role: str = role, _fn: Any = fn) -> str:
+            _jobs[job_id]["step"] = _role
+            if _role not in _jobs[job_id]["steps_done"]:
+                pass  # will be added after completion
+            result_text = await _fn(prompt)
+            if _role not in _jobs[job_id]["steps_done"]:
+                _jobs[job_id]["steps_done"].append(_role)
+            return result_text
+        wrapped[role] = _w
+
+    runner = DebateRunner()
+    try:
+        job["status"] = "running"
+        result = await runner.run_debate(
+            market_data=market_data,
+            get_completions=wrapped,
+            context={"portfolio": {"cash": 1000.0}},
+        )
+        job["result"]  = _build_final_response(market_data, result)
+        job["status"]  = "complete"
+        job["elapsed"] = time.time() - job["started"]
+        job["step"]    = "done"
+    except Exception as exc:
+        job["status"] = "error"
+        job["error"]  = str(exc)
+        job["elapsed"] = time.time() - job["started"]
+
+    # Prune old completed jobs
+    cutoff = time.time() - _JOB_TTL_SECONDS
+    stale  = [jid for jid, j in _jobs.items() if j.get("started", 0) < cutoff]
+    for jid in stale:
+        _jobs.pop(jid, None)
+
+
+@mcp.tool
+async def analyze_market(
+    ticker: str,
+    paper_trade: bool = False,
+) -> dict:
+    """
+    Start the full 7-agent AI debate on a specific Kalshi market.
+
+    This call returns IMMEDIATELY with a job_id.  The debate runs in the
+    background (~5-15 minutes).  Use get_analysis_status(job_id) to poll
+    for progress and retrieve the result when it's ready.
+
+    Agents (run in sequence):
+      1. KnowledgeResearcher — RAG + worldview + DuckDuckGo web search
+      2. ForecasterAgent     — base-rate + current conditions probability
+      3. NewsAnalystAgent    — sentiment and news impact direction
+      4. BullResearcher      — strongest case for YES
+      5. BearResearcher      — strongest case for NO
+      6. RiskManagerAgent    — EV calculation and position sizing
+      7. TraderAgent         — final synthesis through the worldview lens
+
+    Args:
+        ticker:      Kalshi market ticker (e.g. "KXCPI-26MAR-T0.7").
+                     Use list_markets or get_market_ladder to find tickers.
+        paper_trade: Reserved for future use.  Default False.
+
+    Returns:
+        {
+          "job_id":   str,   # pass to get_analysis_status to poll for results
+          "ticker":   str,
+          "title":    str,
+          "status":   "queued",
+          "message":  str,
+        }
+    """
+    assert _kalshi is not None, "Kalshi client not initialised"
+    assert _router is not None, "Model router not initialised"
+
+    market_data, err = await _fetch_market_data(ticker)
+    if err:
+        return {"error": err}
+
+    job_id = str(uuid.uuid4())[:8]   # short, human-readable
+    _jobs[job_id] = {
+        "status":     "queued",
+        "ticker":     ticker,
+        "title":      market_data["title"],
+        "started":    time.time(),
+        "elapsed":    None,
+        "step":       "queued",
+        "steps_done": [],
+        "result":     None,
+        "error":      None,
+    }
+
+    # Fire and forget — runs concurrently while the agent does other things
+    asyncio.create_task(_run_debate_job(job_id, market_data))
+
+    return {
+        "job_id":  job_id,
+        "ticker":  ticker,
+        "title":   market_data["title"],
+        "status":  "queued",
+        "message": (
+            f"Debate started (job_id={job_id!r}).  "
+            "Call get_analysis_status(job_id) to check progress.  "
+            "Expected completion: 5-15 minutes.  "
+            "Suggested polling interval: every 60 seconds."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool 4 — get_analysis_status
+# ---------------------------------------------------------------------------
+@mcp.tool
+async def get_analysis_status(job_id: str) -> dict:
+    """
+    Check the status of a debate analysis started by analyze_market.
+
+    Poll this every 60 seconds after calling analyze_market.  When
+    status == "complete" the full result is included in the response.
+
+    Args:
+        job_id: The job ID returned by analyze_market.
+
+    Returns:
+        While running:
+        {
+          "job_id":      str,
+          "ticker":      str,
+          "status":      "queued" | "running",
+          "current_step": str,    # which agent is currently running
+          "steps_done":  list[str],
+          "elapsed_seconds": float,
+          "message":     str,
+        }
+
+        When complete:
+        {
+          "job_id":      str,
+          "ticker":      str,
+          "status":      "complete",
+          "elapsed_seconds": float,
+          "result":      { ... full analyze_market result ... }
+        }
+
+        On error:
+        {
+          "job_id":  str,
+          "status":  "error",
+          "error":   str,
+        }
+    """
+    job = _jobs.get(job_id)
+    if job is None:
+        return {
+            "job_id": job_id,
+            "status": "not_found",
+            "error":  (
+                f"No job found with id={job_id!r}.  "
+                "Jobs expire after 1 hour.  "
+                "Use analyze_market to start a new one."
+            ),
+        }
+
+    elapsed = time.time() - job["started"]
+    status  = job["status"]
+
+    if status == "complete":
+        return {
+            "job_id":          job_id,
+            "ticker":          job["ticker"],
+            "status":          "complete",
+            "elapsed_seconds": round(job["elapsed"] or elapsed, 1),
+            "result":          job["result"],
+        }
+
+    if status == "error":
+        return {
+            "job_id":  job_id,
+            "ticker":  job["ticker"],
+            "status":  "error",
+            "elapsed_seconds": round(elapsed, 1),
+            "error":   job.get("error", "Unknown error"),
+        }
+
+    # Still running or queued
+    steps_done = job["steps_done"]
+    current    = job["step"]
+    all_steps  = [
+        "knowledge_researcher", "forecaster", "news_analyst",
+        "bull_researcher", "bear_researcher", "risk_manager", "trader",
+    ]
+    remaining = [s for s in all_steps if s not in steps_done]
+
+    return {
+        "job_id":          job_id,
+        "ticker":          job["ticker"],
+        "title":           job.get("title", ""),
+        "status":          status,
+        "current_step":    current,
+        "steps_done":      steps_done,
+        "steps_remaining": remaining,
+        "elapsed_seconds": round(elapsed, 1),
+        "message": (
+            f"Debate in progress.  "
+            f"Currently running: {current}.  "
+            f"Completed: {len(steps_done)}/7 agents.  "
+            f"Elapsed: {elapsed:.0f}s.  "
+            "Call get_analysis_status again in ~60 seconds."
+        ),
     }
 
 
