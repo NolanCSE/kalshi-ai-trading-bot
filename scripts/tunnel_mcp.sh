@@ -165,6 +165,14 @@ wait_for_mcp() {
 # transparently, so no external IP or open firewall rule is needed.
 start_tunnel() {
     info "Opening reverse tunnel: VM:$MCP_PORT ← local:$MCP_PORT (via IAP)..."
+    # First clear any stale port binding on the VM side before opening the tunnel
+    "$GCLOUD" compute ssh "$VM_INSTANCE" \
+        --project="$GCP_PROJECT" \
+        --zone="$ZONE" \
+        --tunnel-through-iap \
+        --command="sudo fuser -k ${MCP_PORT}/tcp 2>/dev/null; sleep 1; true" \
+        2>/dev/null || true
+
     "$GCLOUD" compute ssh "$VM_INSTANCE" \
         --project="$GCP_PROJECT" \
         --zone="$ZONE" \
@@ -174,8 +182,8 @@ start_tunnel() {
         -R "${MCP_PORT}:localhost:${MCP_PORT}" \
         -o "ServerAliveInterval=30" \
         -o "ServerAliveCountMax=3" \
-        -o "ExitOnForwardFailure=yes" \
-        -o "StrictHostKeyChecking=no" &
+        -o "StrictHostKeyChecking=no" \
+        -o "StreamLocalBindUnlink=yes" &
     TUNNEL_PID=$!
     ok "Tunnel established (pid=$TUNNEL_PID)"
 }
