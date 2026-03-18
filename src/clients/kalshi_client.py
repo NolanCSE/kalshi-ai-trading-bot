@@ -301,6 +301,41 @@ class KalshiClient(TradingLoggerMixin):
         return await self._make_authenticated_request(
             "GET", f"/trade-api/v2/markets/{ticker}", require_auth=False
         )
+
+    async def get_events(
+        self,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        series_ticker: Optional[str] = None,
+        status: Optional[str] = None,
+        with_nested_markets: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get events from the Kalshi events endpoint.
+
+        Events are the parent objects that contain one or more markets.
+        This endpoint is more reliable than /markets for discovering
+        political, geopolitical, and novelty markets.
+
+        Args:
+            limit: Maximum number of events to return
+            cursor: Pagination cursor
+            series_ticker: Filter by series ticker
+            status: Filter by status (open, closed, etc.)
+            with_nested_markets: Include full market data for each event
+        """
+        params: Dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        if series_ticker:
+            params["series_ticker"] = series_ticker
+        if status:
+            params["status"] = status
+        if with_nested_markets:
+            params["with_nested_markets"] = "true"
+        return await self._make_authenticated_request(
+            "GET", "/trade-api/v2/events", params=params, require_auth=True
+        )
     
     async def get_orderbook(self, ticker: str, depth: int = 100) -> Dict[str, Any]:
         """

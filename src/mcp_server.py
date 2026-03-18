@@ -162,34 +162,47 @@ _SPORTS_PREFIXES = (
     "KXREALITY",
 )
 
-# Macro / policy series to scan when no specific series is requested.
-# Ordered roughly by typical interest level.
-_MACRO_SERIES = [
-    "KXFED",     # Federal funds rate / FOMC decisions
-    "KXCPI",     # Consumer Price Index
-    "KXGDP",     # GDP growth
-    "KXUNRATE",  # Unemployment rate
-    "KXPCE",     # PCE inflation
-    "KXPPI",     # Producer Price Index
-    "KXNFP",     # Non-Farm Payrolls
-    "KXSPX",     # S&P 500
-    "KXNASDAQ",  # Nasdaq
-    "KXBTC",     # Bitcoin
-    "KXETH",     # Ethereum
-    "KXGOLD",    # Gold price
-    "KXOIL",     # Oil price
-    "KXUSD",     # Dollar index
-    "KXTRUMP",   # Trump policy / executive actions
-    "KXTARIFF",  # Tariff policy
-    "KXDEBT",    # US debt ceiling
-    "KXRECESSION",
-    "KXIRAN",    # Geopolitical
-    "KXUKRAINE",
-    "KXCHINA",
-    "KXNATO",
-    "KXAI",      # AI policy / regulation
-    "KXELON",    # Elon Musk / DOGE
-]
+# ---------------------------------------------------------------------------
+# All known non-sports series on Kalshi, grouped by category.
+# These are fetched by series_ticker which is server-side and fast.
+# Political/geo markets are sparse and scattered; we include every known
+# series and refresh this list as new ones appear.
+# ---------------------------------------------------------------------------
+_SERIES_BY_CATEGORY: dict[str, list[str]] = {
+    "macro": [
+        "KXFED", "KXCPI", "KXGDP", "KXUNRATE", "KXPCE",
+        "KXPPI", "KXNFP", "KXSPX", "KXNASDAQ", "KXGOLD",
+        "KXOIL", "KXUSD", "KXRECESSION", "KXDEFICIT",
+    ],
+    "crypto": [
+        "KXBTC", "KXETH", "KXCRYPTO",
+    ],
+    "policy": [
+        # US executive / regulatory — confirmed to exist on Kalshi
+        "KXFDA", "KXSEC", "KXDEFICIT",
+        # Try these; they return empty if no markets exist yet
+        "KXTRUMP", "KXTARIFF", "KXDEBT", "KXDOGE",
+        "KXELON", "KXCONGRESS", "KXSENATE", "KXHOUSE",
+        "KXIMMIGRATION", "KXBORDER", "KXBUDGET",
+        "KXDOJ", "KXCFTC", "KXFBI", "KXCIA",
+    ],
+    "geo": [
+        # Confirmed to exist
+        "KXUKRAINE",
+        # Try these
+        "KXIRAN", "KXCHINA", "KXTAIWAN", "KXNATO",
+        "KXISRAEL", "KXGAZA", "KXRUSSIA",
+        "KXNORTHKOREA", "KXMIDEAST",
+    ],
+    "ai": [
+        "KXAI", "KXOPENAI", "KXANTHROPICS",
+        "KXTECH", "KXANTITRUST",
+    ],
+}
+# "all" = every series across every category
+_ALL_SERIES: list[str] = list({
+    s for series_list in _SERIES_BY_CATEGORY.values() for s in series_list
+})
 
 
 def _is_sports(ticker: str) -> bool:
@@ -223,7 +236,9 @@ async def list_markets(
                   "macro"  — economics, Fed, inflation, GDP, jobs (default)
                   "crypto" — Bitcoin, Ethereum, crypto prices
                   "geo"    — geopolitics, foreign policy, war/conflict
-                  "policy" — US politics, tariffs, regulation, executive actions
+                  "policy" — US politics, tariffs, regulation, executive actions,
+                             cabinet confirmations, DOGE, executive orders
+                  "ai"     — AI policy, regulation, model releases
                   "all"    — everything non-sports
         min_volume: Minimum number of contracts traded.  Default 1 000.
         limit: Maximum markets to return.  Default 25, max 100.
@@ -249,39 +264,94 @@ async def list_markets(
     """
     assert _kalshi is not None, "Kalshi client not initialised"
     limit = min(int(limit), 100)
-
-    # Map category → which macro series to scan
-    _CATEGORY_SERIES: dict[str, list[str]] = {
-        "macro":  ["KXFED","KXCPI","KXGDP","KXUNRATE","KXPCE","KXPPI","KXNFP",
-                   "KXSPX","KXNASDAQ","KXGOLD","KXOIL","KXUSD","KXRECESSION"],
-        "crypto": ["KXBTC","KXETH"],
-        "geo":    ["KXIRAN","KXUKRAINE","KXCHINA","KXNATO"],
-        "policy": ["KXTRUMP","KXTARIFF","KXDEBT","KXELON","KXAI"],
-        "all":    _MACRO_SERIES,
-    }
+    cat = category.lower()
 
     raw_markets: list[dict] = []
+    seen: set[str] = set()
 
     if series:
-        # Specific series requested — single fetch, no category logic
-        resp = await _kalshi.get_markets(limit=min(limit * 4, 200),
-                                         series_ticker=series.upper())
+        # Explicit series — single targeted fetch via markets endpoint
+        resp = await _kalshi.get_markets(
+            limit=min(limit * 4, 200),
+            series_ticker=series.upper(),
+        )
         raw_markets = resp.get("markets", [])
-    else:
-        # Scan across the relevant series list, collecting until we have enough
-        series_to_scan = _CATEGORY_SERIES.get(category.lower(), _CATEGORY_SERIES["macro"])
-        for s in series_to_scan:
-            if len(raw_markets) >= limit * 6:
-                break
+
+    elif cat == "macro":
+        # Macro has clean, confirmed series prefixes — use markets endpoint
+        for s in _SERIES_BY_CATEGORY["macro"]:
             try:
                 resp = await _kalshi.get_markets(limit=50, series_ticker=s)
-                raw_markets.extend(resp.get("markets", []))
+                for m in resp.get("markets", []):
+                    t = m.get("ticker","")
+                    if t not in seen:
+                        seen.add(t)
+                        raw_markets.append(m)
             except Exception:
                 continue
 
+    else:
+        # For political/geo/crypto/ai/all: use the events endpoint which
+        # surfaces markets that the /markets endpoint misclassifies as
+        # finalized or doesn't surface at all.
+        # Fetch events with nested markets, then filter by title keywords.
+        kw_map: dict[str, tuple[str,...]] = {
+            "policy":  ("tariff","executive","congress","senate","trump","cabinet",
+                        "confirmed","legislation","immigration","border","budget",
+                        "deficit","department","doge","sanction","trade deal",
+                        "executive order","elon","bill passed","signed"),
+            "geo":     ("ukraine","russia","iran","china overtake","taiwan","nato",
+                        "israel","gaza","ceasefire","nuclear deal","troops",
+                        "invasion","north korea","south korea","middle east",
+                        "military strike","foreign policy","sanctions on",
+                        "level 4","state department","free trade agreement"),
+            "crypto":  ("bitcoin","ethereum","btc","eth","crypto","stablecoin",
+                        "blockchain","coinbase","binance"),
+            "ai":      ("artificial intelligence"," ai ","openai","anthropic",
+                        "large language model","chatgpt","ai regulation","ai act",
+                        "deepmind","llm"),
+            "all":     (),  # no keyword filter — take everything non-sports
+        }
+        keywords = kw_map.get(cat, ())
+
+        cursor = None
+        pages = 0
+        while pages < 30:  # up to 30 × 200 = 6 000 events
+            try:
+                resp = await _kalshi.get_events(
+                    limit=200,
+                    cursor=cursor,
+                    with_nested_markets=True,
+                )
+            except Exception:
+                break
+
+            events = resp.get("events", [])
+            for event in events:
+                event_title = (event.get("title") or "").lower()
+                # Skip if keyword filter applies and title doesn't match
+                if keywords and not any(kw in event_title for kw in keywords):
+                    continue
+                # Expand nested markets
+                for m in event.get("markets", []):
+                    t = m.get("ticker","")
+                    if t not in seen:
+                        seen.add(t)
+                        raw_markets.append(m)
+
+            cursor = resp.get("cursor")
+            pages += 1
+            if not cursor or len(events) == 0:
+                break
+            # Stop early once we have plenty of candidates
+            if len(raw_markets) >= limit * 8:
+                break
+
+    # ── Filter and shape ──────────────────────────────────────────────────────
     results = []
     for m in raw_markets:
         ticker = m.get("ticker", "")
+
         if _is_sports(ticker):
             continue
 
@@ -304,22 +374,28 @@ async def list_markets(
             "rules":         (m.get("rules_primary") or "")[:200],
         })
 
-        if len(results) >= limit:
-            break
-
-    # Sort by volume descending so the most liquid markets appear first
     results.sort(key=lambda x: x["volume"], reverse=True)
+    results = results[:limit]
+
+    note = (
+        "Sports and entertainment markets are always excluded. "
+        "Prices in dollars (0-1 scale). yes_mid is the bid/ask midpoint. "
+        "category options: macro (default), crypto, geo, policy, ai, all. "
+        "Use get_market_ladder for a full strike ladder, or analyze_market "
+        "to run the full debate on a specific ticker."
+    )
+    if results == [] and not series:
+        note = (
+            f"No liquid markets found for category='{cat}' at min_volume={min_volume}. "
+            "Kalshi's political and geopolitical markets are currently sparse. "
+            "Try min_volume=0 to see all available markets in this category, "
+            "or use category='macro' for the most liquid markets."
+        )
 
     return {
         "markets": results,
         "count":   len(results),
-        "note": (
-            "Sports and entertainment markets are always excluded. "
-            "Prices in dollars (0-1 scale). yes_mid is the bid/ask midpoint. "
-            "category options: macro (default), crypto, geo, policy, all. "
-            "Use get_market_ladder for a full strike ladder, or analyze_market "
-            "to run the full debate on a specific ticker."
-        ),
+        "note":    note,
     }
 
 
