@@ -15,7 +15,11 @@ class BearResearcher(BaseAgent):
 
     AGENT_NAME = "bear_researcher"
     AGENT_ROLE = "bear_researcher"
-    DEFAULT_MODEL = "google/gemini-3-pro-preview"
+    # Gemini 3 Pro Preview truncates responses at provider-imposed token limits
+    # (finish_reason=length), which drops the reasoning field.  Gemini Flash
+    # completes all fields reliably and is cheaper; Pro is available via the
+    # ModelRouter's FULL_FLEET fallback chain if Flash fails.
+    DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
     SYSTEM_PROMPT = (
         "You are a sceptical risk analyst whose job is to make the STRONGEST "

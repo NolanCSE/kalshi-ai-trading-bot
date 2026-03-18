@@ -1,8 +1,8 @@
 """
 Risk Manager Agent -- evaluates risk/reward and recommends position sizing.
 
-Uses DeepSeek R1 (via OpenRouter) by default.  Focuses on:
-- Expected value calculation
+Uses DeepSeek (via OpenRouter) by default.  Focuses on:
+- Expected value calculation for the SPECIFIC proposed trade direction
 - Position sizing recommendation
 - Risk assessment (1-10 scale)
 """
@@ -19,11 +19,17 @@ class RiskManagerAgent(BaseAgent):
 
     SYSTEM_PROMPT = (
         "You are a quantitative risk manager for a prediction-market trading "
-        "desk. Your job is to evaluate whether a proposed trade has acceptable "
-        "risk/reward and to recommend position sizing.\n\n"
+        "desk. Your job is to evaluate whether a SPECIFIC proposed trade has "
+        "acceptable risk/reward and to recommend position sizing.\n\n"
+        "IMPORTANT: You will be given an explicit PROPOSED TRADE (side and "
+        "entry price). Evaluate EV for THAT trade, not for the opposite side.\n\n"
         "You must consider:\n"
-        "1. EXPECTED VALUE (EV) -- Calculate EV = (estimated probability * payout) "
-        "   - cost. Only trades with positive EV should be taken.\n"
+        "1. EXPECTED VALUE (EV) -- For the proposed trade:\n"
+        "   - If BUYING YES at price P: EV = (consensus_prob_yes * (1-P)) - ((1-consensus_prob_yes) * P)\n"
+        "   - If SELLING YES at price P: EV = ((1-consensus_prob_yes) * P) - (consensus_prob_yes * (1-P))\n"
+        "   - If BUYING NO at price P: EV = (consensus_prob_no * (1-P)) - ((1-consensus_prob_no) * P)\n"
+        "   - If SELLING NO at price P: EV = ((1-consensus_prob_no) * P) - (consensus_prob_no * (1-P))\n"
+        "   Only trades with positive EV should be taken.\n"
         "2. RISK SCORE -- Rate the overall risk from 1 (very safe) to 10 (very "
         "   risky). Consider: liquidity, time to expiry, volatility, information "
         "   quality, and model disagreement.\n"
@@ -43,15 +49,126 @@ class RiskManagerAgent(BaseAgent):
         '  "reasoning": string (detailed risk analysis)'
     )
 
+    @staticmethod
+    def _derive_proposed_trade(
+        market_data: dict, context: dict
+    ) -> tuple[str, str, float, float]:
+        """
+        Derive the proposed trade direction from agent consensus BEFORE asking
+        the LLM to evaluate EV, so the LLM is never left to guess the direction.
+
+        Returns:
+            (action, side, entry_price_cents, consensus_prob_yes)
+        """
+        prob_weight_pairs = []
+
+        fc = context.get("forecaster_result") or {}
+        if fc.get("probability") is not None:
+            try:
+                prob_weight_pairs.append(
+                    (float(fc["probability"]), float(fc.get("confidence", 0.5)))
+                )
+            except (TypeError, ValueError):
+                pass
+
+        bull = context.get("bull_result") or {}
+        if bull.get("probability") is not None:
+            try:
+                prob_weight_pairs.append(
+                    (float(bull["probability"]), float(bull.get("confidence", 0.5)))
+                )
+            except (TypeError, ValueError):
+                pass
+
+        bear = context.get("bear_result") or {}
+        if bear.get("probability") is not None:
+            try:
+                prob_weight_pairs.append(
+                    (float(bear["probability"]), float(bear.get("confidence", 0.5)))
+                )
+            except (TypeError, ValueError):
+                pass
+
+        if prob_weight_pairs:
+            total_weight = sum(w for _, w in prob_weight_pairs)
+            if total_weight > 0:
+                consensus_yes = sum(p * w for p, w in prob_weight_pairs) / total_weight
+            else:
+                consensus_yes = sum(p for p, _ in prob_weight_pairs) / len(prob_weight_pairs)
+        else:
+            consensus_yes = float(market_data.get("yes_price", 0.5))
+
+        consensus_yes = max(0.01, min(0.99, consensus_yes))
+
+        market_yes = float(market_data.get("yes_price", 0.5))
+        market_no  = float(market_data.get("no_price",  0.5))
+
+        yes_edge = consensus_yes - market_yes
+        no_edge  = (1.0 - consensus_yes) - market_no
+
+        if yes_edge >= no_edge and yes_edge > 0:
+            return "BUY", "YES", market_yes * 100, consensus_yes
+        elif no_edge > yes_edge and no_edge > 0:
+            return "BUY", "NO", market_no * 100, consensus_yes
+        else:
+            if abs(yes_edge) >= abs(no_edge):
+                return "SELL", "YES", market_yes * 100, consensus_yes
+            else:
+                return "SELL", "NO", market_no * 100, consensus_yes
+
     def _build_prompt(self, market_data: dict, context: dict) -> str:
         summary = self.format_market_summary(market_data)
 
-        # Build context from other agents' outputs
-        agents_section = ""
+        # Derive the proposed trade so EV can be computed unambiguously
+        action, side, entry_price_cents, consensus_yes = self._derive_proposed_trade(
+            market_data, context
+        )
+        consensus_no = 1.0 - consensus_yes
+        entry_price_frac = entry_price_cents / 100.0
+
+        if action == "BUY" and side == "YES":
+            ev_hint = consensus_yes * (1.0 - entry_price_frac) - consensus_no * entry_price_frac
+            ev_formula = (
+                f"EV = P(YES)*profit_if_yes - P(NO)*cost\n"
+                f"   = {consensus_yes:.3f} * {(1-entry_price_frac):.3f} - {consensus_no:.3f} * {entry_price_frac:.3f}\n"
+                f"   = {ev_hint:.4f}"
+            )
+        elif action == "BUY" and side == "NO":
+            ev_hint = consensus_no * (1.0 - entry_price_frac) - consensus_yes * entry_price_frac
+            ev_formula = (
+                f"EV = P(NO)*profit_if_no - P(YES)*cost\n"
+                f"   = {consensus_no:.3f} * {(1-entry_price_frac):.3f} - {consensus_yes:.3f} * {entry_price_frac:.3f}\n"
+                f"   = {ev_hint:.4f}"
+            )
+        elif action == "SELL" and side == "YES":
+            ev_hint = consensus_no * entry_price_frac - consensus_yes * (1.0 - entry_price_frac)
+            ev_formula = (
+                f"EV = P(NO)*premium_received - P(YES)*payout_owed\n"
+                f"   = {consensus_no:.3f} * {entry_price_frac:.3f} - {consensus_yes:.3f} * {(1-entry_price_frac):.3f}\n"
+                f"   = {ev_hint:.4f}"
+            )
+        else:  # SELL NO
+            ev_hint = consensus_yes * entry_price_frac - consensus_no * (1.0 - entry_price_frac)
+            ev_formula = (
+                f"EV = P(YES)*premium_received - P(NO)*payout_owed\n"
+                f"   = {consensus_yes:.3f} * {entry_price_frac:.3f} - {consensus_no:.3f} * {(1-entry_price_frac):.3f}\n"
+                f"   = {ev_hint:.4f}"
+            )
+
+        proposed_trade_section = (
+            f"\n\n--- PROPOSED TRADE ---\n"
+            f"Action: {action} {side}\n"
+            f"Entry price: {entry_price_cents:.1f}¢\n"
+            f"Consensus P(YES): {consensus_yes:.3f} | Consensus P(NO): {consensus_no:.3f}\n"
+            f"Pre-computed EV for this trade:\n  {ev_formula}\n"
+            f"Evaluate THIS trade. Do not flip to the opposite side.\n"
+            f"--- END PROPOSED TRADE ---"
+        )
+
         pieces = []
 
-        if context.get("forecaster_result"):
-            fc = context["forecaster_result"]
+        fc = context.get("forecaster_result") or {}
+        if fc.get("probability") is not None:
             pieces.append(
                 f"Forecaster: YES prob={fc.get('probability', '?')}, "
                 f"confidence={fc.get('confidence', '?')}"
@@ -79,6 +196,7 @@ class RiskManagerAgent(BaseAgent):
                 f"direction={news.get('impact_direction', '?')}"
             )
 
+        agents_section = ""
         if pieces:
             agents_section = (
                 "\n\n--- OTHER AGENTS' ASSESSMENTS ---\n"
@@ -86,7 +204,6 @@ class RiskManagerAgent(BaseAgent):
                 + "\n--- END ASSESSMENTS ---"
             )
 
-        # Portfolio context
         portfolio_section = ""
         if context.get("portfolio"):
             pf = context["portfolio"]
@@ -99,8 +216,10 @@ class RiskManagerAgent(BaseAgent):
         return (
             f"Evaluate the risk/reward for the following prediction market "
             f"trade.\n\n"
-            f"{summary}{agents_section}{portfolio_section}\n\n"
-            f"Calculate EV, assess risk, and recommend position sizing.\n"
+            f"{summary}{proposed_trade_section}{agents_section}{portfolio_section}\n\n"
+            f"The proposed trade and its pre-computed EV are shown above. "
+            f"Verify the EV calculation, assess overall risk, and recommend "
+            f"position sizing for THAT specific trade.\n"
             f"Return ONLY a JSON object inside a ```json``` code block."
         )
 

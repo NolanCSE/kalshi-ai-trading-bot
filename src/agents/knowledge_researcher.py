@@ -43,9 +43,11 @@ class KnowledgeResearcher(BaseAgent):
     
     AGENT_NAME = "knowledge_researcher"
     AGENT_ROLE = "knowledge_researcher"
-    # Use Mistral via OpenRouter for low-censorship retrieval
-    # This allows processing controversial/truth-seeking material without refusal
-    DEFAULT_MODEL = "mistralai/mistral-7b-instruct"
+    # Use Mistral Nemo via OpenRouter for low-censorship retrieval.
+    # mistral-7b-instruct was delisted from OpenRouter; Nemo is the current
+    # lightweight Mistral model with the same open-weights spirit.
+    # Free fallback: google/gemma-3-12b-it:free
+    DEFAULT_MODEL = "mistralai/mistral-nemo"
     
     SYSTEM_PROMPT = (
         "You are a Knowledge Researcher. Your job is to find and present "

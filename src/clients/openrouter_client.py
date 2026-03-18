@@ -47,9 +47,9 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "input_per_1k": 0.00025,
         "output_per_1k": 0.00038,
     },
-    "mistralai/mistral-7b-instruct": {
-        "input_per_1k": 0.00007,
-        "output_per_1k": 0.00007,
+    "mistralai/mistral-nemo": {
+        "input_per_1k": 0.00002,
+        "output_per_1k": 0.00004,
     },
 }
 
@@ -274,6 +274,10 @@ class OpenRouterClient(TradingLoggerMixin):
     @staticmethod
     def _is_retryable_error(exc: Exception) -> bool:
         error_str = str(exc).lower()
+        # finish_reason=length truncation is NOT retryable on the same model;
+        # the caller's fallback chain will route to a different model instead.
+        if "finish_reason=length" in error_str:
+            return False
         return any(
             indicator in error_str
             for indicator in [
@@ -359,6 +363,21 @@ class OpenRouterClient(TradingLoggerMixin):
                     )
 
                 content = response.choices[0].message.content
+
+                # Detect truncated responses: if the model hit a token/context
+                # limit mid-output the JSON will be incomplete.  Treat this as
+                # a non-retryable failure so the fallback chain tries another model.
+                finish_reason = (
+                    response.choices[0].finish_reason
+                    if response.choices[0].finish_reason
+                    else ""
+                )
+                if finish_reason == "length":
+                    raise ValueError(
+                        f"Model {model} hit token limit (finish_reason=length); "
+                        f"output was truncated at {len(content)} chars. "
+                        "Falling back to next model."
+                    )
 
                 # Token usage
                 input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0

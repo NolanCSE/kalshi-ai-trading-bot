@@ -1,5 +1,5 @@
-# Force LF line endings in the working tree for all files git considers text.
-# This prevents Windows tools from converting shell scripts to CRLF, which
+# Force LF line endings in the working tree for all text files.
+# Prevents Windows tools from converting shell scripts to CRLF, which
 # breaks the #!/usr/bin/env bash shebang under WSL.
 
 # Default: all text files get LF on checkout
