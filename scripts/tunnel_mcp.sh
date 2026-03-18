@@ -101,13 +101,13 @@ cleanup() {
     wait 2>/dev/null || true
     exit 0
 }
-trap cleanup SIGINT SIGTERM EXIT
+trap cleanup SIGINT SIGTERM
 
 # ── Start the MCP server locally ──────────────────────────────────────────────
 start_mcp() {
     # Clear any stale process already holding the port before starting a new one
     local stale
-    stale=$(ss -tlnp 2>/dev/null | grep ":$MCP_PORT " | grep -oP 'pid=\K[0-9]+' | head -1)
+    stale=$(ss -tlnp 2>/dev/null | grep ":$MCP_PORT " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
     if [[ -n "$stale" ]]; then
         warn "Port $MCP_PORT already in use by pid=$stale — killing stale process..."
         kill -9 "$stale" 2>/dev/null || true
@@ -131,10 +131,10 @@ wait_for_mcp() {
     info "Waiting for MCP server to accept connections..."
     while true; do
         # Try the /mcp endpoint; a 4xx still means the server is up
-        if curl -sf --max-time 2 \
-               "http://127.0.0.1:$MCP_PORT/mcp" >/dev/null 2>&1 \
-           || curl -o /dev/null -sf --max-time 2 -w "%{http_code}" \
-               "http://127.0.0.1:$MCP_PORT/mcp" 2>/dev/null | grep -qE "^[1-5]"; then
+        local http_code
+        http_code=$(curl -o /dev/null -sf --max-time 2 -w "%{http_code}" \
+            "http://127.0.0.1:$MCP_PORT/mcp" 2>/dev/null || true)
+        if [[ "$http_code" =~ ^[1-5] ]]; then
             ok "MCP server is ready"
             return
         fi
