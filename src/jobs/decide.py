@@ -293,6 +293,7 @@ async def make_decision_for_market(
                         timeout=30.0
                     )
                     estimated_search_cost = analyzer.total_cost
+                    await analyzer.close()
                     logger.info(f"Sentiment pipeline returned for {market.market_id}")
                 except Exception as e:
                     logger.warning(f"Sentiment pipeline failed for {market.market_id}: {e}, falling back to xAI search")

@@ -20,6 +20,8 @@ class APIConfig:
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""))
     openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
+    newsapi_key: str = field(default_factory=lambda: os.getenv("NEWS_API_KEY", os.getenv("NEWSAPI_KEY", "")))
+    brave_api_key: str = field(default_factory=lambda: os.getenv("BRAVE_API_KEY", ""))
     openai_base_url: str = "https://api.openai.com/v1"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     supabase_url: str = field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
@@ -57,20 +59,16 @@ class SentimentConfig:
     """News and sentiment analysis configuration."""
     enabled: bool = True
     rss_feeds: List[str] = field(default_factory=lambda: [
-        # Reuters killed their public RSS in 2020 — use AP and other free feeds
-        "https://feeds.feedburner.com/businessinsider",
-        "https://www.ft.com/rss/home",
-        "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # CNBC top news
-        "https://www.cnbc.com/id/10000664/device/rss/rss.html",   # CNBC economy
-        "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+        "https://feeds.apnews.com/rss/apf-topnews",
         "https://feeds.bbci.co.uk/news/business/rss.xml",
-        "https://www.politico.com/rss/politics08.xml",
-        "https://thehill.com/feed/",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://news.yahoo.com/rss/world",
     ])
-    sentiment_model: str = "google/gemini-3-flash-preview"  # Fast/cheap for sentiment
+    sentiment_model: str = "google/gemini-3-flash-preview"
     cache_ttl_minutes: int = 30
     max_articles_per_source: int = 10
-    relevance_threshold: float = 0.3
+    relevance_threshold: float = 0.15
 
 
 # Trading strategy configuration - INCREASED AGGRESSIVENESS
@@ -143,6 +141,10 @@ class TradingConfig:
     exclude_low_liquidity_categories: List[str] = field(default_factory=lambda: [
         # REMOVED weather and entertainment - trade all categories
     ])
+
+    # News search controls - MOVED from module globals
+    skip_news_for_low_volume: bool = True
+    news_search_volume_threshold: float = 1000.0
 
 
 @dataclass
@@ -220,8 +222,6 @@ daily_ai_budget: float = 15.0           # INCREASED: Higher budget for more oppo
 max_ai_cost_per_decision: float = 0.12  # INCREASED: Higher per-decision limit (was 0.08, now 0.12)
 analysis_cooldown_hours: int = 2        # DECREASED: Much shorter cooldown (was 4, now 2)
 max_analyses_per_market_per_day: int = 6  # INCREASED: More analyses per day (was 3, now 6)
-skip_news_for_low_volume: bool = True   # Skip expensive searches for low volume
-news_search_volume_threshold: float = 1000.0  # News threshold
 
 # === SYSTEM BEHAVIOR ===
 # Overall system behavior settings

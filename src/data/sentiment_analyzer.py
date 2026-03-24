@@ -15,6 +15,8 @@ from openai import AsyncOpenAI
 
 from src.config.settings import settings
 from src.data.news_aggregator import NewsAggregator, NewsArticle
+from src.data.newsapi_client import NewsAPIClient
+from src.data.brave_search_client import BraveNewsClient
 from src.utils.logging_setup import TradingLoggerMixin
 
 
@@ -67,6 +69,10 @@ class SentimentAnalyzer(TradingLoggerMixin):
         )
         self._model = settings.sentiment.sentiment_model
         self._news = news_aggregator or NewsAggregator()
+
+        # Live news API clients
+        self._newsapi_client: Optional[NewsAPIClient] = None
+        self._brave_client: Optional[BraveNewsClient] = None
 
         # Sentiment cache: hash(text + market_title) -> SentimentResult
         self._cache: Dict[str, SentimentResult] = {}
@@ -145,7 +151,7 @@ class SentimentAnalyzer(TradingLoggerMixin):
             )
             for a in articles
         ]
-        results: List[SentimentResult] = await asyncio.gather(*tasks, return_exceptions=True)
+        results: List[SentimentResult] = list(await asyncio.gather(*tasks, return_exceptions=True))  # type: ignore[assignment]
 
         article_sentiments: List[ArticleSentiment] = []
         scores: List[float] = []
@@ -206,11 +212,20 @@ class SentimentAnalyzer(TradingLoggerMixin):
             return "Sentiment analysis is disabled."
 
         try:
-            # Fetch latest articles
+            # Fetch latest RSS articles
             await self._news.fetch_all()
 
-            # Find relevant articles
+            # Find relevant articles from RSS
             relevant = self._news.get_relevant_articles(market_title, max_articles=5)
+
+            # Try to supplement with live API results if RSS didn't find enough
+            if len(relevant) < 3:
+                live_articles = await self._fetch_live_news(market_title)
+                if live_articles:
+                    live_with_scores = [
+                        (art, 1.0) for art in live_articles
+                    ]
+                    relevant.extend(live_with_scores)
 
             if not relevant:
                 return (
@@ -250,6 +265,66 @@ class SentimentAnalyzer(TradingLoggerMixin):
             total_cost=round(self.total_cost, 4),
             total_requests=self.request_count,
         )
+
+    async def _fetch_live_news(self, market_title: str) -> List[NewsArticle]:
+        """
+        Fetch live news from NewsAPI (primary) and Brave Search (fallback).
+
+        Args:
+            market_title: The market title to search for
+
+        Returns:
+            List of NewsArticle objects from live APIs
+        """
+        all_articles: List[NewsArticle] = []
+
+        # Try NewsAPI first (primary)
+        if not self._newsapi_client:
+            self._newsapi_client = NewsAPIClient()
+
+        newsapi_articles = await self._newsapi_client.fetch_articles(
+            query=market_title,
+            max_results=10,
+        )
+
+        if newsapi_articles:
+            self.logger.info(
+                "NewsAPI returned articles",
+                query=market_title,
+                count=len(newsapi_articles),
+            )
+            all_articles.extend(newsapi_articles)
+        else:
+            # Fallback to Brave Search if NewsAPI returned nothing
+            self.logger.info("NewsAPI returned no results, trying Brave Search")
+            if not self._brave_client:
+                self._brave_client = BraveNewsClient()
+
+            brave_articles = await self._brave_client.fetch_articles(
+                query=market_title,
+                max_results=5,
+            )
+
+            if brave_articles:
+                self.logger.info(
+                    "Brave Search returned articles",
+                    query=market_title,
+                    count=len(brave_articles),
+                )
+                all_articles.extend(brave_articles)
+
+        # Deduplicate based on normalized title
+        if all_articles:
+            seen = set()
+            deduplicated = []
+            for article in all_articles:
+                key = article.normalized_title
+                if key not in seen:
+                    seen.add(key)
+                    deduplicated.append(article)
+            return deduplicated
+
+        return []
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -295,7 +370,11 @@ class SentimentAnalyzer(TradingLoggerMixin):
             )
             elapsed = time.monotonic() - start
 
-            content = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Sentiment model returned empty response")
+
+            content = content.strip()
 
             # Track cost
             input_tokens = response.usage.prompt_tokens if response.usage else 0
