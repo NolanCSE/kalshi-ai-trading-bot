@@ -3,6 +3,10 @@
 # tunnel_mcp.sh — Run the MCP server locally (WSL) and forward its port to
 #                 the GCE VM via a persistent SSH reverse tunnel.
 #
+# Configuration can be provided via:
+#   - .env file (GCP_PROJECT, VM_INSTANCE, ZONE, MCP_PORT)
+#   - CLI arguments (override .env values)
+#
 # Architecture:
 #
 #   WSL (local)                         GCE VM
@@ -18,6 +22,14 @@
 # Usage:
 #   chmod +x scripts/tunnel_mcp.sh
 #   ./scripts/tunnel_mcp.sh <gcp-project> <vm-instance> [zone]
+#
+# OR (preferred) — set defaults in .env and run without arguments:
+#   # Add to .env:
+#   GCP_PROJECT=my-project
+#   VM_INSTANCE=my-vm
+#   ZONE=us-central1-a
+#   MCP_PORT=8765
+#   ./scripts/tunnel_mcp.sh
 #
 # Run persistently in the background (survives terminal close):
 #   mkdir -p logs
@@ -35,12 +47,20 @@
 
 set -euo pipefail
 
-GCP_PROJECT="${1:?Usage: $0 <gcp-project> <vm-instance> [zone]}"
-VM_INSTANCE="${2:?Usage: $0 <gcp-project> <vm-instance> [zone]}"
-ZONE="${3:-us-central1-a}"
-MCP_PORT=8765
-
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load .env for default values (CLI arguments override these)
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+    set -a
+    source "$PROJECT_DIR/.env"
+    set +a
+fi
+
+GCP_PROJECT="${1:-${GCP_PROJECT:?Usage: $0 <gcp-project> <vm-instance> [zone] or set GCP_PROJECT in .env}}"
+VM_INSTANCE="${2:-${VM_INSTANCE:?Usage: $0 <gcp-project> <vm-instance> [zone] or set VM_INSTANCE in .env}}"
+ZONE="${3:-${ZONE:-us-central1-a}}"
+MCP_PORT="${MCP_PORT:-8765}"
+
 VENV="$PROJECT_DIR/venv"
 PYTHON="$VENV/bin/python"
 
@@ -60,7 +80,6 @@ _find_gcloud() {
         "/usr/lib/google-cloud-sdk/bin/gcloud"
         "/usr/share/google-cloud-sdk/bin/gcloud"
         "/snap/bin/gcloud"
-        "/home/giria/google-cloud-sdk/bin/gcloud"
         "$HOME/google-cloud-sdk/bin/gcloud"
         "/opt/google-cloud-sdk/bin/gcloud"
         "/usr/local/lib/google-cloud-sdk/bin/gcloud"
